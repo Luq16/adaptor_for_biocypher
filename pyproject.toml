@@ -24,6 +24,8 @@ requests = "^2.31.0"
 chembl-webresource-client = "^0.10.8"
 pronto = "^2.5.0"
 paramiko = "^2.12.0"
+duckdb = "^1.0.0"
+pyarrow = "^15.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
