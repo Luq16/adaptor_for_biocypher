@@ -103,6 +103,19 @@ except ImportError as e:
     print(f"Warning: DisGeNET adapter not available: {e}")
     _adapters_available['disgenet'] = False
 
+try:
+    from .opentargets_adapter import (
+        OpenTargetsAdapter,
+        OpenTargetsNodeType,
+        OpenTargetsNodeField,
+        OpenTargetsEdgeType,
+        OpenTargetsDataset,
+    )
+    _adapters_available['opentargets'] = True
+except ImportError as e:
+    print(f"Warning: OpenTargets adapter not available: {e}")
+    _adapters_available['opentargets'] = False
+
 # Build __all__ list dynamically based on available adapters
 __all__ = [
     # Always available
@@ -151,6 +164,11 @@ if _adapters_available.get('reactome', False):
 if _adapters_available.get('disgenet', False):
     __all__.extend([
         "DisGeNETAdapter", "DisGeNETNodeType", "DisGeNETEdgeType", "DisGeNETEdgeField"
+    ])
+
+if _adapters_available.get('opentargets', False):
+    __all__.extend([
+        "OpenTargetsAdapter", "OpenTargetsNodeType", "OpenTargetsNodeField", "OpenTargetsEdgeType", "OpenTargetsDataset"
     ])
 
 def get_available_adapters():

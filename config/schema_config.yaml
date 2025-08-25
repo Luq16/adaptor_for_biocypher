@@ -270,3 +270,75 @@ gene associated with disease:
         year_final: int
         gene_symbol: str
         disease_name: str
+
+# OpenTargets nodes
+molecule:
+    is_a: small molecule
+    represented_as: node
+    preferred_id: chembl
+    input_label: molecule
+    properties:
+        name: str
+        type: str
+        mechanism_of_action: str
+        max_clinical_trial_phase: int
+
+mouse model:
+    is_a: biological model
+    represented_as: node
+    preferred_id: mgi
+    input_label: mouse_model
+    properties:
+        name: str
+        description: str
+
+mouse phenotype:
+    is_a: phenotypic feature
+    represented_as: node
+    preferred_id: mp
+    input_label: mouse_phenotype
+    properties:
+        name: str
+        description: str
+
+# OpenTargets edges
+target associated with disease:
+    is_a: gene to disease association
+    represented_as: edge
+    input_label: associated_with_disease
+    source: target
+    target: disease
+    properties:
+        score: float
+        datasources: str[]
+
+target associated with go:
+    is_a: gene to gene ontology term association
+    represented_as: edge
+    input_label: target_go_association
+    source: target
+    target: go term
+    properties:
+        score: float
+        evidence_type: str
+
+molecule associated with target:
+    is_a: chemical affects gene association
+    represented_as: edge
+    input_label: molecule_target_association
+    source: molecule
+    target: target
+    properties:
+        action_type: str
+        mechanism: str
+        phase: int
+
+molecule associated with disease:
+    is_a: chemical to disease or phenotypic feature association
+    represented_as: edge
+    input_label: molecule_disease_association
+    source: molecule
+    target: disease
+    properties:
+        phase: int
+        status: str

@@ -1,6 +1,17 @@
+# macOS
 .DS_Store
-biocypher-*
-.vscode
+
+# IDE specific
+.vscode/
+.idea/
+*.sublime-*
+
+# BioCypher specific
+biocypher-log/
+biocypher-out/
+pypath_log/
+pypath_cache/
+.pypath/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -113,6 +124,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+biocypher_env_*/
 
 # Spyder project settings
 .spyderproject
@@ -131,4 +143,41 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-.idea
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# poetry
+poetry.lock
+
+# Data files
+*.csv
+*.tsv
+*.parquet
+*.db
+*.sqlite
+
+# Neo4j
+neo4j/
+
+# Test data
+test_*.py
+check_*.py
+install_*.py
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# OS specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

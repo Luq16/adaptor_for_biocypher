@@ -13,7 +13,7 @@ import glob
 # You can find this in your Aura console under "Connection URI"
 NEO4J_URI = "neo4j+s://YOUR-INSTANCE.databases.neo4j.io"  # ⚠️ UPDATE THIS with your Connection URI from Aura console
 NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "8jnNa6Qykv_TOpq648yHDJHPiMP90LPm_XVGQDXHGHg"  # Your password looks correct
+NEO4J_PASSWORD = ""  # Your password looks correct
 
 
 # Path to your BioCypher output
