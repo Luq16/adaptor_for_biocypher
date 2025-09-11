@@ -1,6 +1,6 @@
-# BioCypher Real Data Knowledge Graph
+# BioCypher Knowledge Graph Pipeline
 
-A comprehensive BioCypher project template with real biological data adapters for creating large-scale knowledge graphs. This project includes adapters for UniProt, ChEMBL, Disease Ontology, and STRING databases.
+A production-ready BioCypher pipeline for creating comprehensive biological knowledge graphs from multiple data sources. The pipeline integrates data from UniProt, ChEMBL, Disease Ontology, STRING, Gene Ontology, Reactome, DisGeNET, and OpenTargets.
 
 ## 🚀 Features
 
@@ -20,15 +20,89 @@ A comprehensive BioCypher project template with real biological data adapters fo
 - **Gene Ontology**: Functional annotations and GO terms
 - **Reactome**: Biological pathways and processes
 - **DisGeNET**: Gene-disease associations
+- **OpenTargets**: Target-disease associations with evidence scores
+
+## 🔧 Flexible Adapter System
+
+The pipeline supports running **single adapters**, **multiple adapters**, or **all adapters** based on your research needs:
+
+### Single Adapter Usage
+```bash
+# Focus on drug data only
+python run_pipeline.py --adapters chembl --test-mode
+
+# Focus on protein interactions only
+python run_pipeline.py --adapters string --test-mode
+
+# Focus on target-disease associations only
+python run_pipeline.py --adapters opentargets --test-mode
+```
+
+### Multiple Adapter Combinations
+```bash
+# Drug-target analysis
+python run_pipeline.py --adapters chembl uniprot --test-mode
+
+# Protein interaction network
+python run_pipeline.py --adapters uniprot string --test-mode
+
+# Drug-target-disease triangle
+python run_pipeline.py --adapters chembl uniprot opentargets --test-mode
+```
+
+### Pre-built Workflows
+```bash
+make run-chembl              # ChEMBL drugs and compounds
+make run-protein-network     # UniProt proteins + STRING interactions  
+make run-drug-target-disease # Complete drug discovery pipeline
+```
+
+See [examples/adapter_combinations.md](examples/adapter_combinations.md) for detailed usage examples.
+
+## 📁 Project Structure
+
+```
+├── pipeline/
+│   ├── adapters/        # Data source adapters
+│   ├── config/          # Configuration files
+│   ├── data/            # Data storage
+│   ├── logs/            # Execution logs
+│   ├── output/          # Generated outputs
+│   ├── scripts/         # Utility scripts
+│   ├── utils/           # Helper modules
+│   └── workflows/       # Pipeline orchestration
+├── examples/            # Example scripts
+├── tests/               # Test suite
+├── run_pipeline.py      # Main entry point
+└── Makefile             # Common commands
+```
 
 ## ⚡ Quick Reference
 
 ```bash
-# Essential commands (use these instead of python3 directly)
-poetry install                                    # Install dependencies
-poetry run python examples/uniprot_example.py    # Run UniProt example
-poetry run python simple_example.py              # Run working example
-export BIOCYPHER_TEST_MODE=true                   # Always use for first run
+# Install dependencies
+make install
+
+# List available adapters
+make list-adapters
+
+# Run single adapter
+python run_pipeline.py --adapters chembl --test-mode
+
+# Run multiple adapters
+python run_pipeline.py --adapters uniprot string --test-mode
+
+# Run all adapters (default)
+python run_pipeline.py --test-mode
+
+# Specialized workflows
+make run-chembl              # ChEMBL only
+make run-protein-network     # UniProt + STRING
+make run-drug-target-disease # ChEMBL + UniProt + OpenTargets
+
+# Docker operations
+make docker-up    # Start Neo4j
+make docker-down  # Stop Neo4j
 ```
 
 ## 🔧 Quick Start
@@ -52,12 +126,20 @@ poetry run python test_environment.py
 ### 2. Create Knowledge Graph
 
 ```bash
-# Create complete biological knowledge graph
-poetry run python create_biological_knowledge_graph.py
+# Single adapter (focused analysis)
+python run_pipeline.py --adapters chembl --test-mode
 
-# Or use test mode for development (recommended first run)
-export BIOCYPHER_TEST_MODE=true
-poetry run python create_biological_knowledge_graph.py
+# Multiple adapters (combined analysis)
+python run_pipeline.py --adapters uniprot chembl opentargets --test-mode
+
+# All adapters (comprehensive knowledge graph)
+python run_pipeline.py --test-mode
+
+# Production run with full data
+python run_pipeline.py --adapters chembl uniprot
+
+# List available adapters
+python run_pipeline.py --list
 ```
 
 ### 3. Try Individual Adapters

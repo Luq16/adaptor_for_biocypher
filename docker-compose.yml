@@ -10,7 +10,7 @@ services:
       - .:/src/
     command:
       - /bin/bash
-      - /src/scripts/build.sh
+      - /src/pipeline/scripts/build.sh
 
   import:
     image: neo4j:4.4-enterprise
@@ -21,7 +21,7 @@ services:
       FILL_DB_ON_STARTUP: "yes"
     volumes:
       - biocypher_neo4j_volume:/data
-      - ./scripts/import.sh:/scripts/import.sh
+      - ./pipeline/scripts/import.sh:/scripts/import.sh
     command:
       - /bin/bash
       - /scripts/import.sh

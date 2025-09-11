@@ -1,0 +1,344 @@
+# BioCypher schema configuration
+# Defines the knowledge graph components and their mappings
+
+# Node types
+
+protein:
+    represented_as: node
+    preferred_id: uniprot
+    input_label: protein
+    properties:
+        name: str
+        length: int
+        mass_daltons: float
+        sequence: str
+        function: str
+        subcellular_locations: str[]
+        ec_number: str
+
+gene:
+    represented_as: node
+    preferred_id: [ncbigene, ensembl]  # Can use either
+    input_label: gene
+    properties:
+        symbol: str
+        ensembl_transcript_ids: str[]
+        kegg_ids: str[]
+
+organism:
+    is_a: organismal entity
+    represented_as: node
+    preferred_id: ncbitaxon
+    input_label: organism
+    properties:
+        name: str
+
+drug:
+    is_a: small molecule  # Ontology mapping
+    represented_as: node
+    preferred_id: chembl
+    input_label: drug
+    properties:
+        pref_name: str
+        molecule_type: str
+        max_phase: int
+        first_approval: int
+        oral: bool
+        parenteral: bool
+        topical: bool
+        black_box_warning: bool
+        molecular_weight: float
+        smiles: str
+        inchi_key: str
+
+compound:
+    is_a: small molecule
+    represented_as: node
+    preferred_id: chembl
+    input_label: compound
+    properties:
+        pref_name: str
+        molecule_type: str
+        molecular_weight: float
+        alogp: float
+        hba: int
+        hbd: int
+        psa: float
+        rtb: int
+        smiles: str
+        inchi_key: str
+
+target:
+    is_a: molecular entity
+    represented_as: node
+    preferred_id: chembl
+    input_label: target
+    properties:
+        target_type: str
+        organism: str
+        gene_name: str
+        uniprot_accession: str
+
+disease:
+    represented_as: node
+    preferred_id: [doid, mondo]
+    input_label: disease
+    properties:
+        name: str
+        definition: str
+        synonyms: str[]
+        namespace: str
+        is_obsolete: bool
+        umls_cui: str
+        mesh_id: str
+        icd10_code: str
+        icd9_code: str
+        omim_id: str
+
+# Edge types
+
+gene encodes protein:
+    is_a: gene to gene product relationship
+    represented_as: edge
+    input_label: gene_encodes_protein
+    source: gene
+    target: protein
+
+protein belongs to organism:
+    is_a: organism association
+    represented_as: edge
+    input_label: protein_belongs_to_organism
+    source: protein
+    target: organism
+
+compound targets protein:
+    is_a: molecular interaction
+    represented_as: edge
+    input_label: compound_targets
+    source: [compound, drug]
+    target: target
+    properties:
+        activity_type: str
+        activity_value: float
+        activity_units: str
+
+disease is subtype of disease:
+    is_a: hierarchical relationship
+    represented_as: edge
+    input_label: disease_is_subtype_of_disease
+    source: disease
+    target: disease
+    properties:
+        relationship_type: str
+
+disease related to disease:
+    is_a: association
+    represented_as: edge
+    input_label: disease_*_disease  # Wildcard for various relationship types
+    source: disease
+    target: disease
+    properties:
+        relationship_type: str
+
+# Protein-protein interactions (for future STRING adapter)
+protein interacts with protein:
+    is_a: pairwise molecular interaction
+    represented_as: edge
+    input_label: protein_protein_interaction
+    source: protein
+    target: protein
+    properties:
+        interaction_score: float
+        interaction_type: str
+        evidence_type: str
+
+# Drug-disease associations (for future integration)
+drug treats disease:
+    is_a: chemical to disease or phenotypic feature association
+    represented_as: edge
+    input_label: drug_treats_disease
+    source: drug
+    target: disease
+    properties:
+        clinical_status: str
+        evidence_level: str
+
+# Gene-disease associations (for future integration)
+# Gene Ontology nodes and edges
+go term:
+    is_a: biological entity
+    represented_as: node
+    preferred_id: go
+    input_label: go_term
+    properties:
+        name: str
+        namespace: str
+        definition: str
+        synonyms: str[]
+        is_obsolete: bool
+        subset: str[]
+        xrefs: str[]
+
+protein annotated with go term:
+    is_a: gene to gene ontology term association
+    represented_as: edge
+    input_label: protein_annotated_with_go_term
+    source: protein
+    target: go term
+    properties:
+        evidence_code: str
+        reference: str
+        qualifier: str
+        aspect: str
+
+go term is a go term:
+    is_a: hierarchical relationship
+    represented_as: edge
+    input_label: go_term_is_a_go_term
+    source: go term
+    target: go term
+    properties:
+        relationship_type: str
+
+go term part of go term:
+    is_a: hierarchical relationship
+    represented_as: edge
+    input_label: go_term_part_of_go_term
+    source: go term
+    target: go term
+    properties:
+        relationship_type: str
+
+go term regulates go term:
+    is_a: regulatory relationship
+    represented_as: edge
+    input_label: go_term_*_go_term  # Covers regulates, positively_regulates, negatively_regulates
+    source: go term
+    target: go term
+    properties:
+        relationship_type: str
+
+# Pathway nodes and edges
+pathway:
+    is_a: biological process
+    represented_as: node
+    preferred_id: reactome
+    input_label: pathway
+    properties:
+        name: str
+        description: str
+        species: str
+        reactome_id: str
+        is_disease_pathway: bool
+
+protein participates in pathway:
+    is_a: gene to pathway association
+    represented_as: edge
+    input_label: protein_participates_in_pathway
+    source: protein
+    target: pathway
+    properties:
+        role: str
+        compartment: str
+
+pathway child of pathway:
+    is_a: hierarchical relationship
+    represented_as: edge
+    input_label: pathway_child_of_pathway
+    source: pathway
+    target: pathway
+    properties:
+        relationship_type: str
+
+# Enhanced gene-disease associations from DisGeNET
+gene associated with disease:
+    is_a: gene to disease association
+    represented_as: edge
+    input_label: gene_associated_with_disease
+    source: gene
+    target: disease
+    properties:
+        gene_disease_score: float
+        evidence_index: float
+        association_type: str
+        source: str
+        confidence_level: str
+        gene_dsi: float
+        gene_dpi: float
+        pmid: str
+        year_initial: int
+        year_final: int
+        gene_symbol: str
+        disease_name: str
+
+# OpenTargets nodes
+molecule:
+    is_a: small molecule
+    represented_as: node
+    preferred_id: chembl
+    input_label: molecule
+    properties:
+        name: str
+        type: str
+        mechanism_of_action: str
+        max_clinical_trial_phase: int
+
+mouse model:
+    is_a: biological model
+    represented_as: node
+    preferred_id: mgi
+    input_label: mouse_model
+    properties:
+        name: str
+        description: str
+
+mouse phenotype:
+    is_a: phenotypic feature
+    represented_as: node
+    preferred_id: mp
+    input_label: mouse_phenotype
+    properties:
+        name: str
+        description: str
+
+# OpenTargets edges
+target associated with disease:
+    is_a: gene to disease association
+    represented_as: edge
+    input_label: associated_with_disease
+    source: target
+    target: disease
+    properties:
+        score: float
+        datasources: str[]
+
+target associated with go:
+    is_a: gene to gene ontology term association
+    represented_as: edge
+    input_label: target_go_association
+    source: target
+    target: go term
+    properties:
+        score: float
+        evidence_type: str
+
+molecule associated with target:
+    is_a: chemical affects gene association
+    represented_as: edge
+    input_label: molecule_target_association
+    source: molecule
+    target: target
+    properties:
+        action_type: str
+        mechanism: str
+        phase: int
+
+molecule associated with disease:
+    is_a: chemical to disease or phenotypic feature association
+    represented_as: edge
+    input_label: molecule_disease_association
+    source: molecule
+    target: disease
+    properties:
+        phase: int
+        status: str
