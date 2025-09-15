@@ -147,14 +147,16 @@ class GOAdapter(BaseAdapter, DataDownloadMixin):
         """
         logger.info("Downloading GO ontology structure")
         
-        # Get GO ontology
+        # Get GO ontology using reliable function
         try:
-            # Download GO terms using pypath
-            logger.info("Fetching GO terms from pypath")
-            go_terms = go_input.go_terms()
+            # Download GO annotations using pypath get_go_quick
+            logger.info("Fetching GO annotations from pypath")
+            # Convert organism to integer if it's a string
+            organism_id = int(self.organism) if isinstance(self.organism, str) else self.organism
+            go_data = go_input.get_go_quick(organism=organism_id)
             
             # Convert to expected format for processing
-            self._process_go_terms_from_pypath(go_terms)
+            self._process_go_data_from_pypath(go_data)
             
         except Exception as e:
             logger.error(f"Failed to download GO ontology: {e}")
@@ -177,6 +179,68 @@ class GOAdapter(BaseAdapter, DataDownloadMixin):
             logger.error(f"Failed to download GO annotations: {e}")
             # Continue without annotations if they fail
             logger.warning("Continuing without GO annotations")
+    
+    def _process_go_data_from_pypath(self, go_data):
+        """
+        Process GO data from pypath get_go_quick format.
+        """
+        logger.info("Processing GO data from pypath")
+        
+        self.go_terms = {}
+        self.go_annotations = {}
+        
+        # Extract GO names dictionary
+        go_names = go_data.get('names', {})
+        
+        # Extract GO terms and annotations for each aspect
+        terms_data = go_data.get('terms', {})
+        
+        # Collect all unique GO terms
+        all_go_terms = set()
+        for aspect in ['C', 'F', 'P']:  # Cellular Component, Function, Process
+            aspect_terms = terms_data.get(aspect, {})
+            for protein_id, go_term_set in aspect_terms.items():
+                all_go_terms.update(go_term_set)
+                
+                # Store annotations
+                if protein_id not in self.go_annotations:
+                    self.go_annotations[protein_id] = []
+                
+                for go_term in go_term_set:
+                    self.go_annotations[protein_id].append({
+                        'go_term': go_term,
+                        'aspect': aspect,
+                        'evidence_code': 'IEA',  # Default from get_go_quick
+                    })
+        
+        # Create GO term entries
+        term_count = 0
+        aspect_map = {
+            'C': 'cellular_component',
+            'F': 'molecular_function', 
+            'P': 'biological_process'
+        }
+        
+        for go_id in tqdm(all_go_terms, desc="Processing GO terms"):
+            if self.test_mode and term_count >= 100:
+                break
+            
+            # Determine aspect from GO ID or use default
+            aspect = 'P'  # Default to biological process
+            
+            self.go_terms[go_id] = {
+                GONodeField.ID.value: go_id,
+                GONodeField.NAME.value: go_names.get(go_id, ''),
+                GONodeField.NAMESPACE.value: aspect_map.get(aspect, 'biological_process'),
+                GONodeField.DEFINITION.value: '',  # Not available in get_go_quick
+                GONodeField.IS_OBSOLETE.value: False,
+                GONodeField.SYNONYMS.value: [],
+            }
+            
+            term_count += 1
+        
+        logger.info(f"Processed {len(self.go_terms)} GO terms")
+        logger.info(f"Processed GO annotations for {len(self.go_annotations)} proteins")
     
     def _process_go_terms_from_pypath(self, go_terms_data):
         """
@@ -424,7 +488,7 @@ class GOAdapter(BaseAdapter, DataDownloadMixin):
                 protein_node_id = self.add_prefix_to_id("uniprot", protein_id)
                 
                 for annotation in annotations:
-                    go_id = annotation['go_id']
+                    go_id = annotation.get('go_term') or annotation.get('go_id')
                     go_node_id = self.add_prefix_to_id("go", go_id.replace("GO:", ""))
                     
                     properties = self.get_metadata_dict()

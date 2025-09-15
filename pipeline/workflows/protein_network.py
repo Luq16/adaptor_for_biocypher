@@ -47,11 +47,11 @@ def main():
         node_fields=[
             UniprotNodeField.PROTEIN_NAME,
             UniprotNodeField.GENE_NAMES,
-            UniprotNodeField.ORGANISM,
+            UniprotNodeField.ORGANISM_NAME,
             UniprotNodeField.LENGTH,
             UniprotNodeField.FUNCTION,
             UniprotNodeField.SUBCELLULAR_LOCATION,
-            UniprotNodeField.GO_TERMS,
+            # UniprotNodeField.GO_TERMS,  # Field not available
         ],
         test_mode=test_mode,
     )
@@ -76,7 +76,7 @@ def main():
             StringEdgeField.TEXTMINING_SCORE,
             StringEdgeField.COEXPRESSION_SCORE,
         ],
-        score_threshold=0.7,  # High confidence interactions
+        score_threshold="high_confidence",  # Use STRING's predefined high confidence threshold (≥700/1000)
         test_mode=test_mode,
     )
     

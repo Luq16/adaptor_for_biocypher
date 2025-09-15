@@ -149,13 +149,24 @@ class ReactomeAdapter(BaseAdapter, DataDownloadMixin):
         logger.info(f"Downloading Reactome pathways for {self.species_map.get(str(self.organism), self.organism)}")
         
         try:
-            # Get pathways from pypath
-            pathways_data = reactome.reactome_pathways(organism=self.organism)
+            # Get pathways from PyPath reactome_raw data
+            logger.info("Extracting pathway information from PyPath reactome_raw data")
+            raw_data = reactome.reactome_raw(id_type='uniprot')
             
             self.pathways = {}
             pathway_count = 0
             
-            for pathway_id, pathway_info in tqdm(pathways_data.items(), desc="Processing pathways"):
+            for entry in tqdm(raw_data, desc="Extracting pathways from raw data"):
+                # Filter for human data if organism is specified
+                if (self.organism == "9606" or self.organism == 9606) and \
+                   entry.get('species') != 'Homo sapiens':
+                    continue
+                
+                pathway_id = entry['pathway_id']
+                
+                # Skip if we already have this pathway or reached test limit
+                if pathway_id in self.pathways:
+                    continue
                 if self.test_mode and pathway_count >= 50:
                     break
                 
@@ -163,16 +174,16 @@ class ReactomeAdapter(BaseAdapter, DataDownloadMixin):
                 pathway_data = {
                     ReactomeNodeField.ID.value: pathway_id,
                     ReactomeNodeField.REACTOME_ID.value: pathway_id,
-                    ReactomeNodeField.NAME.value: pathway_info.get('name', ''),
-                    ReactomeNodeField.SPECIES.value: self.species_map.get(str(self.organism), str(self.organism)),
+                    ReactomeNodeField.NAME.value: entry.get('pathway_name', ''),
+                    ReactomeNodeField.SPECIES.value: entry.get('species', ''),
                 }
                 
-                # Add description if available
-                if 'description' in pathway_info:
-                    pathway_data[ReactomeNodeField.DESCRIPTION.value] = pathway_info['description']
+                # Add URL if available
+                if entry.get('url'):
+                    pathway_data['url'] = entry['url']
                 
                 # Check if it's a disease pathway
-                pathway_name = pathway_info.get('name', '').lower()
+                pathway_name = entry.get('pathway_name', '').lower()
                 is_disease = any(keyword in pathway_name for keyword in 
                                ['disease', 'cancer', 'disorder', 'syndrome', 'deficiency'])
                 pathway_data[ReactomeNodeField.IS_DISEASE_PATHWAY.value] = is_disease
@@ -267,33 +278,39 @@ class ReactomeAdapter(BaseAdapter, DataDownloadMixin):
     
     def _download_protein_pathway_associations(self):
         """
-        Download protein-pathway associations.
+        Download protein-pathway associations using correct PyPath function.
         """
         logger.info("Downloading protein-pathway associations")
         
         try:
-            # Get UniProt to Reactome mappings
-            uniprot_reactome = reactome.reactome_uniprot(organism=self.organism)
+            # Get raw Reactome data with UniProt IDs
+            raw_data = reactome.reactome_raw(id_type='uniprot')
             
             self.protein_pathway_associations = []
             association_count = 0
             
-            for uniprot_id, pathway_ids in tqdm(uniprot_reactome.items(), desc="Processing associations"):
+            for entry in tqdm(raw_data, desc="Processing protein-pathway associations"):
                 if self.test_mode and association_count >= 500:
                     break
                 
-                # Ensure pathway_ids is iterable
-                if isinstance(pathway_ids, str):
-                    pathway_ids = [pathway_ids]
+                # Filter for human data if organism is specified
+                if (self.organism == "9606" or self.organism == 9606) and \
+                   entry.get('species') != 'Homo sapiens':
+                    continue
                 
-                for pathway_id in pathway_ids:
-                    if pathway_id in self.pathways:
-                        self.protein_pathway_associations.append({
-                            'protein_id': uniprot_id,
-                            'pathway_id': pathway_id,
-                            'role': 'participant',  # Default role
-                        })
-                        association_count += 1
+                uniprot_id = entry['id']
+                pathway_id = entry['pathway_id']
+                
+                # Check if this pathway is in our pathways collection
+                if pathway_id in self.pathways:
+                    self.protein_pathway_associations.append({
+                        'protein_id': uniprot_id,
+                        'pathway_id': pathway_id,
+                        'role': 'participant',
+                        'evidence_code': entry.get('evidence_code', 'IEA'),
+                        'pathway_name': entry.get('pathway_name', ''),
+                    })
+                    association_count += 1
             
             logger.info(f"Downloaded {len(self.protein_pathway_associations)} protein-pathway associations")
             
@@ -309,25 +326,27 @@ class ReactomeAdapter(BaseAdapter, DataDownloadMixin):
         logger.info("Downloading pathway hierarchy")
         
         try:
-            # Get pathway hierarchy
-            hierarchy_data = reactome.reactome_hierarchy(organism=self.organism)
+            # Get pathway hierarchy data using correct PyPath function
+            hierarchy_data = reactome.pathway_hierarchy()
             
             self.pathway_hierarchy = []
+            hierarchy_count = 0
             
-            for parent_id, children in tqdm(hierarchy_data.items(), desc="Processing hierarchy"):
-                if parent_id not in self.pathways:
-                    continue
+            for entry in tqdm(hierarchy_data, desc="Processing hierarchy"):
+                if self.test_mode and hierarchy_count >= 100:
+                    break
                 
-                if isinstance(children, str):
-                    children = [children]
+                parent_id = entry['parent']
+                child_id = entry['child']
                 
-                for child_id in children:
-                    if child_id in self.pathways:
-                        self.pathway_hierarchy.append({
-                            'parent_id': parent_id,
-                            'child_id': child_id,
-                            'relationship': 'child_of',
-                        })
+                # Only include hierarchy relationships between pathways we have
+                if parent_id in self.pathways and child_id in self.pathways:
+                    self.pathway_hierarchy.append({
+                        'parent_id': parent_id,
+                        'child_id': child_id,
+                        'relationship': 'child_of'
+                    })
+                    hierarchy_count += 1
             
             logger.info(f"Downloaded {len(self.pathway_hierarchy)} pathway hierarchy relationships")
             
@@ -366,10 +385,20 @@ class ReactomeAdapter(BaseAdapter, DataDownloadMixin):
         """
         logger.info("Generating pathway edges")
         
+        # Check if we have any data to generate edges from
+        has_associations = (ReactomeEdgeType.PROTEIN_IN_PATHWAY in self.edge_types and 
+                           self.protein_pathway_associations)
+        has_hierarchy = (ReactomeEdgeType.PATHWAY_CHILD_OF_PATHWAY in self.edge_types and 
+                        self.pathway_hierarchy)
+        
+        if not has_associations and not has_hierarchy:
+            logger.warning("No protein-pathway associations or hierarchy data available for edge generation")
+            # Return empty generator - this prevents StopIteration errors
+            return
+            yield  # Make this a proper generator
+        
         # Protein-pathway associations
-        if (ReactomeEdgeType.PROTEIN_IN_PATHWAY in self.edge_types and 
-            self.protein_pathway_associations):
-            
+        if has_associations:
             for association in tqdm(self.protein_pathway_associations, 
                                   desc="Generating protein-pathway edges"):
                 protein_id = self.add_prefix_to_id("uniprot", association['protein_id'])
@@ -382,9 +411,7 @@ class ReactomeAdapter(BaseAdapter, DataDownloadMixin):
                 yield (None, protein_id, pathway_id, "protein_participates_in_pathway", properties)
         
         # Pathway hierarchy
-        if (ReactomeEdgeType.PATHWAY_CHILD_OF_PATHWAY in self.edge_types and 
-            self.pathway_hierarchy):
-            
+        if has_hierarchy:
             for hierarchy in tqdm(self.pathway_hierarchy, 
                                 desc="Generating pathway hierarchy edges"):
                 child_id = self.add_prefix_to_id("reactome", 

@@ -62,8 +62,8 @@ def main():
             ChemblNodeField.TARGET_TYPE,
         ],
         edge_types=[
-            ChemblEdgeType.DRUG_TARGETS,
-            ChemblEdgeType.COMPOUND_TARGETS,
+            ChemblEdgeType.COMPOUND_TARGETS_PROTEIN,
+            ChemblEdgeType.DRUG_TREATS_DISEASE,
         ],
         test_mode=test_mode,
     )
@@ -88,10 +88,10 @@ def main():
         node_fields=[
             UniprotNodeField.PROTEIN_NAME,
             UniprotNodeField.GENE_NAMES,
-            UniprotNodeField.ORGANISM,
+            UniprotNodeField.ORGANISM_NAME,
             UniprotNodeField.FUNCTION,
             UniprotNodeField.SUBCELLULAR_LOCATION,
-            UniprotNodeField.PATHWAY,
+            # UniprotNodeField.PATHWAY,  # Field not available
         ],
         test_mode=test_mode,
     )

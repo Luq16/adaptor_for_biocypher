@@ -107,14 +107,65 @@ try:
     from .opentargets_adapter import (
         OpenTargetsAdapter,
         OpenTargetsNodeType,
-        OpenTargetsNodeField,
         OpenTargetsEdgeType,
-        OpenTargetsDataset,
+        OpenTargetsEdgeField,
     )
     _adapters_available['opentargets'] = True
 except ImportError as e:
     print(f"Warning: OpenTargets adapter not available: {e}")
     _adapters_available['opentargets'] = False
+
+try:
+    from .side_effect_adapter import (
+        SideEffectAdapter,
+        SideEffectNodeType,
+        SideEffectNodeField,
+        SideEffectEdgeType,
+        SideEffectEdgeField,
+    )
+    _adapters_available['side_effect'] = True
+except ImportError as e:
+    print(f"Warning: SideEffect adapter not available: {e}")
+    _adapters_available['side_effect'] = False
+
+try:
+    from .phenotype_adapter import (
+        PhenotypeAdapter,
+        PhenotypeNodeType,
+        PhenotypeNodeField,
+        PhenotypeEdgeType,
+        PhenotypeEdgeField,
+    )
+    _adapters_available['phenotype'] = True
+except ImportError as e:
+    print(f"Warning: Phenotype adapter not available: {e}")
+    _adapters_available['phenotype'] = False
+
+try:
+    from .orthology_adapter import (
+        OrthologyAdapter,
+        OrthologyNodeType,
+        OrthologyNodeField,
+        OrthologyEdgeType,
+        OrthologyEdgeField,
+    )
+    _adapters_available['orthology'] = True
+except ImportError as e:
+    print(f"Warning: Orthology adapter not available: {e}")
+    _adapters_available['orthology'] = False
+
+try:
+    from .ppi_adapter import (
+        PPIAdapter,
+        PPINodeType,
+        PPINodeField,
+        PPIEdgeType,
+        PPIEdgeField,
+    )
+    _adapters_available['ppi'] = True
+except ImportError as e:
+    print(f"Warning: PPI adapter not available: {e}")
+    _adapters_available['ppi'] = False
 
 # Build __all__ list dynamically based on available adapters
 __all__ = [
@@ -168,7 +219,27 @@ if _adapters_available.get('disgenet', False):
 
 if _adapters_available.get('opentargets', False):
     __all__.extend([
-        "OpenTargetsAdapter", "OpenTargetsNodeType", "OpenTargetsNodeField", "OpenTargetsEdgeType", "OpenTargetsDataset"
+        "OpenTargetsAdapter", "OpenTargetsNodeType", "OpenTargetsEdgeType", "OpenTargetsEdgeField"
+    ])
+
+if _adapters_available.get('side_effect', False):
+    __all__.extend([
+        "SideEffectAdapter", "SideEffectNodeType", "SideEffectNodeField", "SideEffectEdgeType", "SideEffectEdgeField"
+    ])
+
+if _adapters_available.get('phenotype', False):
+    __all__.extend([
+        "PhenotypeAdapter", "PhenotypeNodeType", "PhenotypeNodeField", "PhenotypeEdgeType", "PhenotypeEdgeField"
+    ])
+
+if _adapters_available.get('orthology', False):
+    __all__.extend([
+        "OrthologyAdapter", "OrthologyNodeType", "OrthologyNodeField", "OrthologyEdgeType", "OrthologyEdgeField"
+    ])
+
+if _adapters_available.get('ppi', False):
+    __all__.extend([
+        "PPIAdapter", "PPINodeType", "PPINodeField", "PPIEdgeType", "PPIEdgeField"
     ])
 
 def get_available_adapters():

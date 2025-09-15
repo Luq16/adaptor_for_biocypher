@@ -62,8 +62,8 @@ def main():
             ChemblNodeField.ORGANISM,
         ],
         edge_types=[
-            ChemblEdgeType.DRUG_TARGETS,
-            ChemblEdgeType.COMPOUND_TARGETS,
+            ChemblEdgeType.COMPOUND_TARGETS_PROTEIN,
+            ChemblEdgeType.DRUG_TREATS_DISEASE,
         ],
         test_mode=test_mode,
     )

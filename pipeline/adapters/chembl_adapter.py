@@ -1,9 +1,23 @@
 from enum import Enum, auto
 from typing import Optional, Generator, Union
 from biocypher._logger import logger
-from chembl_webresource_client.new_client import new_client
+from contextlib import ExitStack
 from tqdm import tqdm
 import time
+import pandas as pd
+
+# Always import ChEMBL web client for fallback
+from chembl_webresource_client.new_client import new_client
+
+# Use pypath for ChEMBL data (like CROssBARv2 approach)
+try:
+    from pypath.inputs import chembl as pypath_chembl
+    from pypath.share import curl, settings
+    PYPATH_AVAILABLE = True
+    logger.info("PyPath available for ChEMBL data download")
+except ImportError:
+    PYPATH_AVAILABLE = False
+    logger.warning("PyPath not available, falling back to ChEMBL web client")
 
 from .base_adapter import BaseAdapter, BaseEnumMeta, DataDownloadMixin
 
@@ -113,12 +127,12 @@ class ChemblAdapter(BaseAdapter, DataDownloadMixin):
         self.edge_types = edge_types or list(ChemblEdgeType)
         
         # Storage for data
-        self.molecules = []
-        self.targets = []
-        self.activities = []
-        self.assays = []
+        self.molecules = pd.DataFrame()
+        self.targets = pd.DataFrame()
+        self.activities = pd.DataFrame()
+        self.drug_indications = pd.DataFrame()
         
-        # ChEMBL client instances
+        # Initialize client references (always available for fallback)
         self.molecule_client = new_client.molecule
         self.target_client = new_client.target
         self.activity_client = new_client.activity
@@ -128,17 +142,98 @@ class ChemblAdapter(BaseAdapter, DataDownloadMixin):
     
     def download_data(self, limit: Optional[int] = None):
         """
-        Download data from ChEMBL.
+        Download data from ChEMBL using pypath (CROssBARv2 approach).
         
         Args:
             limit: Maximum number of molecules to fetch (useful for testing)
         """
         with self.timer("Downloading ChEMBL data"):
-            self._download_molecules(limit)
-            if ChemblNodeType.TARGET in self.node_types:
-                self._download_targets()
-            if self.edge_types and ChemblEdgeType.COMPOUND_TARGETS_PROTEIN in self.edge_types:
-                self._download_activities()
+            if PYPATH_AVAILABLE and not self.test_mode:
+                # Only use pypath in production mode (it's slow for testing)
+                self._download_via_pypath(limit)
+            else:
+                logger.info("Using direct ChEMBL client (test mode or pypath not available)")
+                self._download_via_client(limit)
+    
+    def _download_via_pypath(self, limit: Optional[int] = None):
+        """
+        Download ChEMBL data via pypath (following CROssBARv2 approach).
+        """
+        logger.info("Downloading ChEMBL data via pypath")
+        
+        with ExitStack() as stack:
+            # Handle pypath settings context compatibility
+            if hasattr(settings, 'context'):
+                stack.enter_context(settings.context(retries=3))
+            else:
+                logger.warning("pypath settings.context not available, using default settings")
+            
+            try:
+                # Download molecules (drugs and compounds)
+                if ChemblNodeType.DRUG in self.node_types or ChemblNodeType.COMPOUND in self.node_types:
+                    logger.info("Downloading ChEMBL molecules")
+                    molecules_data = list(pypath_chembl.molecule())
+                    
+                    if molecules_data:
+                        self.molecules = pd.DataFrame(molecules_data)
+                        
+                        # Apply filters
+                        if self.max_phase is not None:
+                            self.molecules = self.molecules[
+                                self.molecules.get('max_phase', 0) >= self.max_phase
+                            ]
+                        
+                        # Apply test mode limiting
+                        if self.test_mode or limit:
+                            limit_val = min(limit or 100, 100) if self.test_mode else limit
+                            self.molecules = self.molecules.head(limit_val)
+                        
+                        logger.info(f"Downloaded {len(self.molecules)} molecules")
+                
+                # Download drug indications
+                if ChemblEdgeType.DRUG_TREATS_DISEASE in self.edge_types:
+                    logger.info("Downloading ChEMBL drug indications")
+                    indications_data = list(pypath_chembl.indication())
+                    
+                    if indications_data:
+                        self.drug_indications = pd.DataFrame(indications_data)
+                        logger.info(f"Downloaded {len(self.drug_indications)} drug indications")
+                
+                # Download activities (compound-target relationships)
+                if ChemblEdgeType.COMPOUND_TARGETS_PROTEIN in self.edge_types:
+                    logger.info("Downloading ChEMBL activities")
+                    activities_data = list(pypath_chembl.activity())
+                    
+                    if activities_data:
+                        self.activities = pd.DataFrame(activities_data)
+                        
+                        # Filter by organism if specified
+                        if self.organism:
+                            self.activities = self.activities[
+                                self.activities.get('organism', '').str.contains(self.organism, na=False, case=False)
+                            ]
+                        
+                        # Apply test mode limiting
+                        if self.test_mode and len(self.activities) > 1000:
+                            self.activities = self.activities.head(1000)
+                        
+                        logger.info(f"Downloaded {len(self.activities)} activities")
+                
+            except Exception as e:
+                logger.error(f"PyPath ChEMBL download failed: {e}")
+                logger.info("Falling back to direct ChEMBL client")
+                self._download_via_client(limit)
+    
+    def _download_via_client(self, limit: Optional[int] = None):
+        """
+        Download ChEMBL data via direct client (fallback method).
+        """
+        logger.info("Using direct ChEMBL web client")
+        self._download_molecules(limit)
+        if ChemblNodeType.TARGET in self.node_types:
+            self._download_targets()
+        if self.edge_types and ChemblEdgeType.COMPOUND_TARGETS_PROTEIN in self.edge_types:
+            self._download_activities_client()
     
     def _download_molecules(self, limit: Optional[int] = None):
         """
@@ -173,7 +268,7 @@ class ChemblAdapter(BaseAdapter, DataDownloadMixin):
                 logger.warning(f"Could not apply limit {limit}: {e}")
                 # Continue without limit
         
-        # Fetch and store molecules
+        # Reset molecules list for web client approach
         self.molecules = []
         processed_count = 0
         valid_count = 0
@@ -247,7 +342,7 @@ class ChemblAdapter(BaseAdapter, DataDownloadMixin):
         
         logger.info(f"Downloaded {len(self.targets)} targets")
     
-    def _download_activities(self):
+    def _download_activities_client(self):
         """
         Download bioactivity data for compound-target relationships.
         """
@@ -314,20 +409,39 @@ class ChemblAdapter(BaseAdapter, DataDownloadMixin):
         
         # Yield drug/compound nodes
         if ChemblNodeType.DRUG in self.node_types or ChemblNodeType.COMPOUND in self.node_types:
-            for mol in tqdm(self.molecules, desc="Generating molecule nodes"):
-                properties = self._get_molecule_properties(mol)
-                if properties:
-                    mol_id = mol.get(ChemblNodeField.MOLECULE_CHEMBL_ID.value)
-                    if mol_id:
-                        # Determine if it's a drug or compound based on max_phase
-                        max_phase = mol.get(ChemblNodeField.MAX_PHASE.value)
-                        node_label = "drug" if max_phase and max_phase >= 4 else "compound"
-                        
-                        # Only yield if matching requested node types
-                        if (node_label == "drug" and ChemblNodeType.DRUG in self.node_types) or \
-                           (node_label == "compound" and ChemblNodeType.COMPOUND in self.node_types):
-                            prefixed_id = self.add_prefix_to_id("chembl", mol_id)
-                            yield (prefixed_id, node_label, properties)
+            # Handle both DataFrame (pypath) and list (web client) formats
+            if isinstance(self.molecules, pd.DataFrame):
+                # PyPath format
+                for _, mol in tqdm(self.molecules.iterrows(), total=len(self.molecules), desc="Generating molecule nodes"):
+                    properties = self._get_molecule_properties_df(mol)
+                    if properties:
+                        mol_id = mol.get('molecule_chembl_id') or mol.get('chembl_id')
+                        if mol_id:
+                            # Determine if it's a drug or compound based on max_phase
+                            max_phase = mol.get('max_phase')
+                            node_label = "drug" if max_phase and max_phase >= 4 else "compound"
+                            
+                            # Only yield if matching requested node types
+                            if (node_label == "drug" and ChemblNodeType.DRUG in self.node_types) or \
+                               (node_label == "compound" and ChemblNodeType.COMPOUND in self.node_types):
+                                prefixed_id = self.add_prefix_to_id("chembl", mol_id)
+                                yield (prefixed_id, node_label, properties)
+            else:
+                # Web client format (list)
+                for mol in tqdm(self.molecules, desc="Generating molecule nodes"):
+                    properties = self._get_molecule_properties(mol)
+                    if properties:
+                        mol_id = mol.get(ChemblNodeField.MOLECULE_CHEMBL_ID.value)
+                        if mol_id:
+                            # Determine if it's a drug or compound based on max_phase
+                            max_phase = mol.get(ChemblNodeField.MAX_PHASE.value)
+                            node_label = "drug" if max_phase and max_phase >= 4 else "compound"
+                            
+                            # Only yield if matching requested node types
+                            if (node_label == "drug" and ChemblNodeType.DRUG in self.node_types) or \
+                               (node_label == "compound" and ChemblNodeType.COMPOUND in self.node_types):
+                                prefixed_id = self.add_prefix_to_id("chembl", mol_id)
+                                yield (prefixed_id, node_label, properties)
         
         # Yield target nodes
         if ChemblNodeType.TARGET in self.node_types:
@@ -350,18 +464,41 @@ class ChemblAdapter(BaseAdapter, DataDownloadMixin):
         
         # Compound-Target edges from bioactivities
         if ChemblEdgeType.COMPOUND_TARGETS_PROTEIN in self.edge_types:
-            for activity in tqdm(self.activities, desc="Generating compound-target edges"):
-                mol_id = activity.get('molecule_chembl_id')
-                target_id = activity.get('target_chembl_id')
-                
-                if mol_id and target_id:
-                    source_id = self.add_prefix_to_id("chembl", mol_id)
-                    target_node_id = self.add_prefix_to_id("chembl", target_id)
+            # Handle both DataFrame (pypath) and list (web client) formats
+            if isinstance(self.activities, pd.DataFrame):
+                # PyPath format
+                for _, activity in tqdm(self.activities.iterrows(), total=len(self.activities), desc="Generating compound-target edges"):
+                    mol_id = activity.get('molecule_chembl_id') or activity.get('chembl_id')
+                    target_id = activity.get('target_chembl_id') or activity.get('target_id')
                     
-                    # Edge properties include activity data
-                    properties = self.get_metadata_dict()
-                    if activity.get('standard_type'):
-                        properties['activity_type'] = activity['standard_type']
+                    if mol_id and target_id:
+                        source_id = self.add_prefix_to_id("chembl", mol_id)
+                        target_node_id = self.add_prefix_to_id("chembl", target_id)
+                        
+                        # Edge properties include activity data
+                        properties = self.get_metadata_dict()
+                        if activity.get('activity_type') or activity.get('standard_type'):
+                            properties['activity_type'] = activity.get('activity_type') or activity.get('standard_type')
+                        if activity.get('activity_value') or activity.get('standard_value'):
+                            properties['activity_value'] = activity.get('activity_value') or activity.get('standard_value')
+                        if activity.get('activity_unit') or activity.get('standard_units'):
+                            properties['activity_unit'] = activity.get('activity_unit') or activity.get('standard_units')
+                        
+                        yield (None, source_id, target_node_id, "compound_targets_protein", properties)
+            else:
+                # Web client format (list)
+                for activity in tqdm(self.activities, desc="Generating compound-target edges"):
+                    mol_id = activity.get('molecule_chembl_id')
+                    target_id = activity.get('target_chembl_id')
+                    
+                    if mol_id and target_id:
+                        source_id = self.add_prefix_to_id("chembl", mol_id)
+                        target_node_id = self.add_prefix_to_id("chembl", target_id)
+                        
+                        # Edge properties include activity data
+                        properties = self.get_metadata_dict()
+                        if activity.get('standard_type'):
+                            properties['activity_type'] = activity['standard_type']
                     if activity.get('standard_value'):
                         properties['activity_value'] = float(activity['standard_value'])
                     if activity.get('standard_units'):
@@ -415,6 +552,47 @@ class ChemblAdapter(BaseAdapter, DataDownloadMixin):
             properties["smiles"] = mol[ChemblNodeField.SMILES.value]
         if ChemblNodeField.INCHI_KEY.value in mol and mol[ChemblNodeField.INCHI_KEY.value]:
             properties["inchi_key"] = mol[ChemblNodeField.INCHI_KEY.value]
+        
+        return properties
+    
+    def _get_molecule_properties_df(self, mol: pd.Series) -> dict:
+        """
+        Get properties for a molecule node from DataFrame row (pypath format).
+        """
+        properties = self.get_metadata_dict()
+        
+        # Map common pypath field names to our properties
+        field_mappings = {
+            'pref_name': 'pref_name',
+            'molecule_type': 'molecule_type', 
+            'max_phase': 'max_phase',
+            'therapeutic_flag': 'therapeutic_flag',
+            'natural_product': 'natural_product',
+            'first_approval': 'first_approval',
+            'oral': 'oral',
+            'parenteral': 'parenteral',
+            'topical': 'topical',
+            'black_box_warning': 'black_box_warning',
+            'availability_type': 'availability_type',
+            'withdrawn_flag': 'withdrawn_flag',
+            # Chemical properties
+            'molecular_weight': 'full_mwt',
+            'alogp': 'alogp',
+            'hba': 'hba', 
+            'hbd': 'hbd',
+            'psa': 'psa',
+            'rtb': 'rtb',
+            'molecular_formula': 'full_molformula',
+            # Structural
+            'smiles': 'canonical_smiles',
+            'inchi_key': 'standard_inchi_key'
+        }
+        
+        # Extract properties using mappings
+        for prop_name, field_name in field_mappings.items():
+            value = mol.get(field_name) or mol.get(prop_name)  # Try both names
+            if value is not None and pd.notna(value):
+                properties[prop_name] = value
         
         return properties
     

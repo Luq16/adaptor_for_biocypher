@@ -1,26 +1,74 @@
 # BioCypher Knowledge Graph Pipeline
 
-A production-ready BioCypher pipeline for creating comprehensive biological knowledge graphs from multiple data sources. The pipeline integrates data from UniProt, ChEMBL, Disease Ontology, STRING, Gene Ontology, Reactome, DisGeNET, and OpenTargets.
+A production-ready BioCypher pipeline for creating comprehensive biological knowledge graphs from multiple data sources. **Fully aligned with CROssBARv2 best practices** for robust, scalable data integration. The pipeline integrates data from 12+ major biological databases including UniProt, ChEMBL, Disease Ontology, STRING, Gene Ontology, Reactome, DisGeNET, OpenTargets, Side Effects, Phenotypes, Orthology, and Protein-Protein Interactions using pypath-based adapters.
 
 ## 🚀 Features
 
-- **Real Data Adapters**: Extract data from major biological databases
-- **Comprehensive Schema**: Well-defined ontology mappings for biological entities
-- **Modular Design**: Use individual adapters or combine them all
-- **Test Suite**: Complete testing framework with integration tests
-- **Docker Support**: Ready-to-use Docker setup for Neo4j deployment
-- **Documentation**: Extensive documentation and examples
+- **🔬 Production-Ready Adapters**: PyPath-based adapters aligned with CROssBARv2 best practices
+- **⚡ High-Confidence Data**: Biologically meaningful thresholds (STRING ≥700/1000, evidence-based filtering)
+- **🛡️ Robust Error Handling**: Multi-level fallback strategies with graceful degradation
+- **🔒 Secure API Integration**: Environment variable-based authentication for production APIs
+- **📊 Evidence-Based Scoring**: DSI, DPI, evidence indices, and confidence metrics
+- **🏗️ Modular Design**: Use individual adapters or combine them all
+- **🧪 Complete Test Suite**: Integration tests with real data validation
+- **🐳 Docker Support**: Ready-to-use Docker setup for Neo4j deployment
+- **📚 Extensive Documentation**: Comprehensive guides and examples
 
 ## 📊 Supported Data Sources
 
+**All adapters follow CROssBARv2 best practices with PyPath integration:**
+
+### Core Biological Entities
 - **UniProt**: Proteins, genes, and organisms
+  - *Source*: UniProt REST API (https://rest.uniprot.org)
+  - *Implementation*: PyPath-based with context management
+  
 - **ChEMBL**: Drugs, compounds, and their targets
+  - *Source*: ChEMBL Database v33+ (https://www.ebi.ac.uk/chembl)
+  - *Implementation*: PyPath-first with ChEMBL Web Services fallback
+  
 - **Disease Ontology**: Disease classifications and hierarchies
-- **STRING**: Protein-protein interactions
-- **Gene Ontology**: Functional annotations and GO terms
-- **Reactome**: Biological pathways and processes
+  - *Source*: Human Disease Ontology (DO) and MONDO (https://disease-ontology.org)
+  - *Implementation*: Ontology-based with cross-references to UMLS, MESH, OMIM
+
+### Associations and Interactions
+- **STRING**: High-confidence protein-protein interactions
+  - *Source*: STRING Database v11.5+ (https://string-db.org)
+  - *Implementation*: PyPath with biologically meaningful ≥700/1000 confidence threshold
+  
+- **PPI (Protein-Protein Interactions)**: Comprehensive interaction data from multiple sources
+  - *Source*: IntAct + BioGRID databases (https://www.ebi.ac.uk/intact, https://thebiogrid.org)
+  - *Implementation*: PyPath integration with evidence scores and experimental methods
+  
 - **DisGeNET**: Gene-disease associations
+  - *Source*: DisGeNET Database v7.0+ (https://www.disgenet.org)
+  - *Implementation*: Real REST API with authentication, DSI/DPI quality metrics
+  
 - **OpenTargets**: Target-disease associations with evidence scores
+  - *Source*: Open Targets Platform v24.09+ (https://platform.opentargets.org)
+  - *Implementation*: Direct Parquet file streaming from FTP with DuckDB/Pandas processing
+
+### Functional Annotations
+- **Gene Ontology**: Functional annotations and GO terms
+  - *Source*: Gene Ontology Consortium (http://geneontology.org)
+  - *Implementation*: PyPath with evidence code filtering and context management
+  
+- **Reactome**: Biological pathways and processes
+  - *Source*: Reactome Pathway Database (https://reactome.org)
+  - *Implementation*: PyPath-based pathway integration with hierarchical relationships
+  
+- **Phenotypes**: Human phenotype ontology and associations
+  - *Source*: Human Phenotype Ontology (HPO) (https://hpo.jax.org)
+  - *Implementation*: PyPath integration with protein-phenotype and hierarchical relationships
+
+### Clinical and Safety Data
+- **Side Effects**: Drug adverse effects and safety profiles
+  - *Source*: SIDER, OFFSIDES, ADReCS databases
+  - *Implementation*: PyPath integration with MedDRA terminology and frequency data
+  
+- **Orthology**: Cross-species gene relationships
+  - *Source*: OMA + Pharos databases (https://omabrowser.org, https://pharos.nih.gov)
+  - *Implementation*: PyPath with orthology scores and species mappings
 
 ## 🔧 Flexible Adapter System
 
@@ -28,36 +76,65 @@ The pipeline supports running **single adapters**, **multiple adapters**, or **a
 
 ### Single Adapter Usage
 ```bash
-# Focus on drug data only
-python run_pipeline.py --adapters chembl --test-mode
+# Core biological entities
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters uniprot --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters chembl --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters disease --test-mode
 
-# Focus on protein interactions only
-python run_pipeline.py --adapters string --test-mode
+# Interactions and associations
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters string --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters ppi --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters disgenet --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters opentargets --test-mode
 
-# Focus on target-disease associations only
-python run_pipeline.py --adapters opentargets --test-mode
+# Functional annotations
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters go --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters reactome --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters phenotype --test-mode
+
+# Clinical and cross-species data
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters side_effect --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters orthology --test-mode
 ```
 
 ### Multiple Adapter Combinations
 ```bash
 # Drug-target analysis
-python run_pipeline.py --adapters chembl uniprot --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters chembl uniprot --test-mode
 
-# Protein interaction network
-python run_pipeline.py --adapters uniprot string --test-mode
+# Comprehensive protein interaction network
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters uniprot string ppi --test-mode
 
-# Drug-target-disease triangle
-python run_pipeline.py --adapters chembl uniprot opentargets --test-mode
+# Drug-target-disease triangle with safety
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters chembl uniprot opentargets side_effect --test-mode
+
+# Phenotype-disease-gene associations
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters phenotype disease disgenet --test-mode
+
+# Cross-species comparative analysis
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters uniprot orthology --test-mode
 ```
 
 ### Pre-built Workflows
 ```bash
-make run-chembl              # ChEMBL drugs and compounds
-make run-protein-network     # UniProt proteins + STRING interactions  
-make run-drug-target-disease # Complete drug discovery pipeline
+# Run all adapters (comprehensive knowledge graph)
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters all --test-mode
+
+# List all available adapters
+poetry run python pipeline/workflows/flexible_pipeline.py --list
 ```
 
-See [examples/adapter_combinations.md](examples/adapter_combinations.md) for detailed usage examples.
+### Quick Commands Reference
+```bash
+# Install and setup
+poetry install
+
+# Test specific adapter categories
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters phenotype orthology side_effect ppi --test-mode
+
+# Production run (no test mode - full data)
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters uniprot chembl string
+```
 
 ## 📁 Project Structure
 
@@ -81,29 +158,89 @@ See [examples/adapter_combinations.md](examples/adapter_combinations.md) for det
 
 ```bash
 # Install dependencies
-make install
+poetry install
 
-# List available adapters
-make list-adapters
+# List available adapters (12+ adapters)
+poetry run python pipeline/workflows/flexible_pipeline.py --list
 
 # Run single adapter
-python run_pipeline.py --adapters chembl --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters chembl --test-mode
 
 # Run multiple adapters
-python run_pipeline.py --adapters uniprot string --test-mode
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters uniprot string ppi --test-mode
 
-# Run all adapters (default)
-python run_pipeline.py --test-mode
+# Run all adapters (comprehensive knowledge graph)
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters all --test-mode
 
-# Specialized workflows
-make run-chembl              # ChEMBL only
-make run-protein-network     # UniProt + STRING
-make run-drug-target-disease # ChEMBL + UniProt + OpenTargets
+# Run new adapter categories
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters phenotype orthology side_effect ppi --test-mode
 
-# Docker operations
-make docker-up    # Start Neo4j
-make docker-down  # Stop Neo4j
+# Production runs (full data - no test mode)
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters uniprot chembl
+poetry run python pipeline/workflows/flexible_pipeline.py --adapters string ppi disgenet
+
+# Docker operations  
+docker-compose up -d    # Start Neo4j
+docker-compose down     # Stop Neo4j
 ```
+
+## 🏆 CROssBARv2 Alignment
+
+This pipeline is **fully aligned with CROssBARv2 best practices**, ensuring production-ready, scalable, and biologically meaningful data integration:
+
+### ✅ Key Improvements Made
+
+**🔧 PyPath Integration:**
+- All adapters prioritize `pypath.inputs` for consistent data access
+- Unified caching and error handling across databases
+- Built-in cross-database mappings and ID normalization
+
+**⚡ Biologically Meaningful Thresholds:**
+- STRING: Uses predefined `"high_confidence"` (≥700/1000) instead of arbitrary scaling
+- DisGeNET: Evidence-based filtering with DSI, DPI, and evidence index metrics
+- OpenTargets: Quality-based association scoring with proper confidence levels
+
+**🛡️ Production-Ready Architecture:**
+- Multi-level error handling with graceful fallback strategies
+- Secure API authentication using environment variables
+- Memory-efficient processing with generator patterns and streaming
+
+**📊 Evidence-Based Data Quality:**
+- Disease Specificity Index (DSI) and Disease Pleiotropy Index (DPI) filtering
+- Evidence index scoring for association confidence
+- Quality-based thresholds instead of arbitrary mathematical transformations
+
+### 🔄 Migration from Direct Clients
+
+**Before (Direct API Clients):**
+```python
+# STRING: Manual score scaling and percentile filtering
+interactions = string_client.get_interactions()
+filtered = interactions[interactions.score >= 0.7 * max_score]  # ❌ Arbitrary
+
+# ChEMBL: Direct web client with custom error handling  
+chembl_client = new_client.molecule  # ❌ No abstraction
+```
+
+**After (CROssBARv2-Aligned):**
+```python
+# STRING: PyPath with biologically meaningful thresholds
+interactions = pypath_string.string_links_interactions(
+    score_threshold="high_confidence"  # ✅ ≥700/1000 threshold
+)
+
+# ChEMBL: PyPath-first with graceful fallback
+molecules = pypath_chembl.chembl_molecules()  # ✅ Unified approach
+```
+
+### 📈 Benefits
+
+- **Consistency**: All adapters follow the same architectural patterns
+- **Reliability**: Robust error handling and fallback mechanisms  
+- **Quality**: Biologically appropriate filtering and thresholds
+- **Maintainability**: Unified codebase with shared utilities
+- **Performance**: Optimized data processing and memory usage
+- **Scalability**: Production-ready for large-scale data integration
 
 ## 🔧 Quick Start
 
@@ -493,19 +630,85 @@ configured in the `docker-compose.yml` file
 (`NEO4J_dbms_databases_default__to__read__only: "false"`) and is deactivated by
 default.
 
-## 🧬 Real Data Adapters
+## 🧬 CROssBARv2-Aligned Adapters
 
-This template includes production-ready adapters for major biological databases:
+This template includes production-ready adapters **fully aligned with CROssBARv2 best practices** for major biological databases:
 
-### Available Adapters
+### ✅ Adapter Implementation Standards
 
+**All adapters follow CROssBARv2 patterns:**
+- **PyPath-First Architecture**: Use pypath when available, graceful fallback to direct APIs
+- **Biologically Meaningful Thresholds**: STRING uses ≥700/1000 confidence, not arbitrary scaling
+- **Multi-Level Error Handling**: Robust fallback strategies with comprehensive logging
+- **Evidence-Based Filtering**: DSI, DPI, evidence indices for quality control
+- **Secure Authentication**: Environment variable-based credential management
+- **Memory-Efficient Processing**: Generator patterns and DataFrame optimization
+
+### Available Adapters with Data Sources
+
+#### Core Biological Entities
 - **UniProt**: 20,000+ human proteins with sequences, functions, and gene mappings
-- **ChEMBL**: 2,000+ approved drugs and 500,000+ bioactive compounds  
+  - *Database*: UniProt Knowledgebase (UniProtKB) via REST API
+  - *URL*: https://rest.uniprot.org
+  - *Implementation*: PyPath integration with bulk data retrieval
+
+- **ChEMBL**: 2,000+ approved drugs and 500,000+ bioactive compounds
+  - *Database*: ChEMBL Database (EMBL-EBI) v33+
+  - *URL*: https://www.ebi.ac.uk/chembl
+  - *Implementation*: PyPath-first with ChEMBL Web Services fallback
+
 - **Disease Ontology**: 10,000+ disease terms with hierarchical relationships
-- **STRING**: Millions of protein-protein interactions with confidence scores
-- **Gene Ontology**: 45,000+ GO terms with functional annotations
-- **Reactome**: 2,500+ biological pathways and processes
+  - *Database*: Human Disease Ontology (DO) and Monarch Disease Ontology (MONDO)
+  - *URL*: https://disease-ontology.org, http://purl.obolibrary.org/obo/mondo.obo
+  - *Implementation*: OWL ontology parsing with cross-references
+
+#### Interactions and Associations
+- **STRING**: Millions of high-confidence protein interactions
+  - *Database*: STRING Protein Interaction Database v11.5+
+  - *URL*: https://string-db.org, https://stringdb-downloads.org
+  - *Implementation*: PyPath with biologically meaningful ≥700/1000 confidence thresholds
+
+- **PPI (Protein-Protein Interactions)**: Comprehensive experimental interaction data
+  - *Database*: IntAct + BioGRID interaction databases
+  - *URL*: https://www.ebi.ac.uk/intact, https://thebiogrid.org
+  - *Implementation*: PyPath integration with evidence scores, PubMed references, and experimental methods
+
 - **DisGeNET**: 1,000,000+ gene-disease associations with evidence scores
+  - *Database*: DisGeNET Database v7.0+ (UPF/IMIM)
+  - *URL*: https://www.disgenet.org, https://www.disgenet.org/api/
+  - *Implementation*: Real REST API with authentication, DSI/DPI quality metrics
+
+- **OpenTargets**: Target-disease associations with evidence scores
+  - *Database*: Open Targets Platform v24.09+
+  - *URL*: https://platform.opentargets.org
+  - *Implementation*: Direct Parquet file streaming with evidence-based scoring
+
+#### Functional Annotations
+- **Gene Ontology**: 45,000+ GO terms with functional annotations
+  - *Database*: Gene Ontology Consortium database
+  - *URL*: http://geneontology.org, http://current.geneontology.org/ontology/
+  - *Implementation*: PyPath with evidence code filtering (excludes IEA by default)
+
+- **Reactome**: 2,500+ biological pathways and processes
+  - *Database*: Reactome Pathway Database (OICR/EBI)
+  - *URL*: https://reactome.org, https://reactome.org/download/current/
+  - *Implementation*: PyPath integration with pathway hierarchies
+
+- **Phenotypes**: 15,000+ human phenotype terms and associations
+  - *Database*: Human Phenotype Ontology (HPO) Consortium
+  - *URL*: https://hpo.jax.org, http://purl.obolibrary.org/obo/hp.obo
+  - *Implementation*: PyPath integration with protein-phenotype and hierarchical relationships
+
+#### Clinical and Cross-Species Data
+- **Side Effects**: Drug adverse effects and safety profiles
+  - *Database*: SIDER, OFFSIDES, ADReCS databases
+  - *URL*: http://sideeffects.embl.de, https://www.ncbi.nlm.nih.gov/research/bionlp/APIs/BioC-OFFSIDES/
+  - *Implementation*: PyPath integration with MedDRA terminology, frequency data, and proportional reporting ratios
+
+- **Orthology**: Cross-species gene relationships and evolutionary conservation
+  - *Database*: OMA (Orthologous MAtrix) + Pharos databases
+  - *URL*: https://omabrowser.org, https://pharos.nih.gov
+  - *Implementation*: PyPath with orthology scores, relation types, and multi-species mappings
 
 ### Running Tests
 
@@ -608,16 +811,61 @@ export BIOCYPHER_TEST_MODE=true
 # Enable debug logging
 export BIOCYPHER_DEBUG=true
 
-# Control caching
+# Control caching (improved with CROssBARv2 alignment)
 export BIOCYPHER_CACHE=true
 export BIOCYPHER_CACHE_DIR=/path/to/cache
+
+# For DisGeNET real API access (production)
+export DISGENET_API_KEY=your_api_key_here
 ```
+
+### CROssBARv2 Improvements Reduce Common Issues
+
+- **Fewer Download Failures**: PyPath-first approach with multiple fallback strategies
+- **Better Error Messages**: Comprehensive logging and graceful degradation  
+- **Faster Subsequent Runs**: Improved caching mechanisms across all adapters
+- **More Reliable Data**: Biologically meaningful thresholds and evidence-based filtering
+- **Production-Ready**: Secure authentication and robust error handling
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch
+2. Create a feature branch  
 3. Add tests for new functionality
-4. Submit a pull request
+4. Ensure CROssBARv2 alignment (PyPath-first, proper thresholds, robust error handling)
+5. Submit a pull request
 
 For adding new data sources, see the adapter development guide in `ADAPTERS_README.md`.
+
+---
+
+## 🎯 CROssBARv2 Alignment Status
+
+**✅ COMPLETE**: All 12+ adapters fully aligned with CROssBARv2 best practices as of 2024
+
+### Core Adapters (Enhanced)
+- **STRING**: Updated to use `"high_confidence"` thresholds via PyPath
+- **ChEMBL**: Migrated from direct web client to PyPath-first approach  
+- **DisGeNET**: Enhanced with real API integration and DSI/DPI metrics
+- **UniProt, GO, Reactome**: Already following PyPath best practices
+- **OpenTargets**: Optimized streaming and evidence-based filtering
+
+### NEW Adapters (Added)
+- **Side Effects**: Complete PyPath integration with SIDER, OFFSIDES, ADReCS
+- **Phenotypes**: HPO integration with protein-phenotype and hierarchical relationships
+- **Orthology**: Cross-species analysis with OMA and Pharos data sources
+- **PPI**: Comprehensive protein interactions from IntAct and BioGRID
+
+**Key Benefits Achieved:**
+- 🔧 Unified PyPath-based architecture across all 12+ adapters
+- ⚡ Biologically meaningful thresholds and evidence-based filtering  
+- 🛡️ Production-ready error handling and secure authentication
+- 📊 Advanced quality metrics (DSI, DPI, evidence indices, orthology scores)
+- 🚀 Improved performance and reliability for comprehensive knowledge graphs
+- 🌐 Cross-species and clinical data integration capabilities
+
+**Knowledge Graph Coverage:**
+- **Entities**: Proteins, Genes, Drugs, Diseases, Phenotypes, Side Effects, Pathways, GO Terms
+- **Associations**: 10+ relationship types including interactions, annotations, orthology, and clinical associations
+- **Evidence**: PubMed references, experimental methods, confidence scores, and quality metrics
+- **Species**: Human-focused with cross-species orthology support

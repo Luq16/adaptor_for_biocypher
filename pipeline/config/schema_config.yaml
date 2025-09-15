@@ -271,6 +271,30 @@ gene associated with disease:
         gene_symbol: str
         disease_name: str
 
+# Gene-disease association following CROssBARv2 methodology
+gene to disease association:
+    is_a: association
+    represented_as: edge
+    label_as_edge: gene_is_related_to_disease
+    source: gene
+    target: disease
+    label_in_input: gene_is_related_to_disease
+    properties:
+        source: str[]
+        variant_source: str[]
+        opentargets_score: float
+        disgenet_gene_disease_score: float
+        diseases_confidence_score: float
+        clinvar_clinical_significance: str
+        clinvar_review_status: int
+        clinvar_dbsnp_id: str
+        clinvar_variation_id: str
+        clinvar_pubmed_ids: str[]
+        humsavar_dbsnp_id: str
+        kegg_pathways: str[]
+        ctd_inference_score: float
+        ctd_reference_count: int
+
 # OpenTargets nodes
 molecule:
     is_a: small molecule
@@ -342,3 +366,121 @@ molecule associated with disease:
     properties:
         phase: int
         status: str
+
+# Side effect nodes and edges (following CROssBARv2 methodology)
+side effect:
+    is_a: phenotypic feature
+    represented_as: node
+    preferred_id: meddra
+    input_label: side_effect
+    properties:
+        name: str
+        meddra_id: str
+        category: str
+        synonyms: str[]
+        system_organ_class: str
+        frequency: float
+        severity: str
+
+drug has side effect:
+    is_a: chemical to disease or phenotypic feature association
+    represented_as: edge
+    input_label: drug_has_side_effect
+    source: drug
+    target: side effect
+    properties:
+        frequency: float
+        proportional_reporting_ratio: float
+        source: str
+        detection_method: str
+        confidence_interval: str
+        p_value: float
+        severity: str
+        onset: str
+
+side effect is a side effect:
+    is_a: hierarchical relationship
+    represented_as: edge
+    input_label: side_effect_is_a_side_effect
+    source: side effect
+    target: side effect
+    properties:
+        relationship_type: str
+
+# Phenotype nodes and edges (following CROssBARv2 methodology)
+phenotype:
+    is_a: phenotypic feature
+    represented_as: node
+    preferred_id: hp
+    input_label: phenotype
+    properties:
+        name: str
+        synonyms: str[]
+        definition: str
+        namespace: str
+        is_obsolete: bool
+        xrefs: str[]
+        subset: str[]
+
+protein is associated with phenotype:
+    is_a: gene to phenotype association
+    represented_as: edge
+    input_label: protein_is_associated_with_phenotype
+    source: protein
+    target: phenotype
+    properties:
+        evidence_code: str
+        pubmed_ids: str[]
+        source: str
+
+phenotype is a phenotype:
+    is_a: hierarchical relationship
+    represented_as: edge
+    input_label: phenotype_is_a_phenotype
+    source: phenotype
+    target: phenotype
+    properties:
+        relationship_type: str
+
+phenotype is associated with disease:
+    is_a: phenotype to disease association
+    represented_as: edge
+    input_label: phenotype_is_associated_with_disease
+    source: phenotype
+    target: disease
+    properties:
+        evidence: str
+        pubmed_ids: str[]
+        source: str
+
+# Orthology edges (following CROssBARv2 methodology - no nodes, only edges)
+gene is orthologous with gene:
+    is_a: gene to gene homology association
+    represented_as: edge
+    input_label: gene_is_orthologous_with_gene
+    source: gene
+    target: gene
+    properties:
+        source: str
+        relation_type: str
+        oma_orthology_score: float
+        source_organism: str
+        target_organism: str
+
+# Protein-protein interaction edges (following CROssBARv2 methodology - no nodes, only edges)
+protein interacts with protein:
+    is_a: pairwise molecular interaction
+    represented_as: edge
+    input_label: protein_interacts_with_protein
+    source: protein
+    target: protein
+    properties:
+        source: str
+        pubmed_ids: str[]
+        intact_score: float
+        methods: str[]
+        interaction_types: str[]
+        experimental_system: str
+        confidence_score: float
+        detection_method: str
+        interaction_type: str

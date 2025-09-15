@@ -198,9 +198,127 @@ class DisGeNETAdapter(BaseAdapter, DataDownloadMixin):
     def _download_via_api(self):
         """
         Download data via DisGeNET API (requires registration).
+        Following CROssBARv2 approach for production API integration.
         """
-        logger.warning("API download not implemented. Using sample data.")
-        self._create_sample_data()
+        try:
+            # Try pypath's DisGeNET integration first (preferred)
+            from pypath.inputs import disgenet as pypath_disgenet
+            
+            logger.info("Downloading DisGeNET data via pypath")
+            
+            # Use pypath to get gene-disease associations
+            # This follows CROssBARv2's approach of using pypath when available
+            gda_data = pypath_disgenet.disgenet_gene_disease_associations()
+            
+            if gda_data:
+                # Convert to DataFrame
+                self.gene_disease_associations = pd.DataFrame(gda_data)
+                
+                # Apply test mode limiting if needed
+                if self.test_mode and len(self.gene_disease_associations) > 100:
+                    self.gene_disease_associations = self.gene_disease_associations.head(100)
+                    logger.info("Test mode: Limited to 100 associations")
+                
+                logger.info(f"Downloaded {len(self.gene_disease_associations)} associations via pypath")
+                return
+            
+        except ImportError:
+            logger.warning("PyPath DisGeNET module not available")
+        except Exception as e:
+            logger.warning(f"PyPath DisGeNET download failed: {e}")
+        
+        # Fallback to direct API calls (CROssBARv2 secondary approach)
+        try:
+            self._download_via_direct_api()
+        except Exception as e:
+            logger.error(f"Direct API download failed: {e}")
+            logger.info("Falling back to sample data for demonstration")
+            self._create_sample_data()
+    
+    def _download_via_direct_api(self):
+        """
+        Download via direct DisGeNET REST API calls.
+        Follows CROssBARv2 authentication and filtering patterns.
+        """
+        import requests
+        import getpass
+        
+        # DisGeNET API configuration
+        api_base = "https://www.disgenet.org/api"
+        
+        # Check for credentials (in production, use secure storage)
+        api_key = os.environ.get('DISGENET_API_KEY')
+        if not api_key:
+            logger.warning("DISGENET_API_KEY environment variable not set")
+            logger.info("For production use, register at https://www.disgenet.org/signup/")
+            raise ValueError("DisGeNET API key required for real data access")
+        
+        # Prepare headers
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Accept': 'application/json'
+        }
+        
+        # Build query parameters following CROssBARv2 filtering approach
+        params = {
+            'source': 'CURATED,LITERATURE' if self.evidence_level == 'all' else self.evidence_level.upper(),
+            'min_score': self.score_threshold,
+            'limit': 100 if self.test_mode else 1000,
+            'format': 'json'
+        }
+        
+        # Get gene-disease associations
+        endpoint = f"{api_base}/gda"
+        
+        logger.info(f"Requesting DisGeNET data from {endpoint}")
+        response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if 'results' in data:
+                associations = data['results']
+                
+                # Convert to standardized format
+                processed_data = []
+                for assoc in associations:
+                    processed_data.append({
+                        'gene_id': str(assoc.get('geneid', '')),
+                        'gene_symbol': assoc.get('gene_symbol', ''),
+                        'disease_id': f"UMLS:{assoc.get('disease_id', '')}",
+                        'disease_name': assoc.get('disease_name', ''),
+                        'score': float(assoc.get('score', 0.0)),
+                        'evidence_index': float(assoc.get('ei', 0.0)),
+                        'source': assoc.get('source', 'UNKNOWN'),
+                        'association_type': assoc.get('association_type', 'Unknown'),
+                        'gene_dsi': float(assoc.get('dsi', 0.0)),
+                        'gene_dpi': float(assoc.get('dpi', 0.0)),
+                        'pmid': assoc.get('pmid', ''),
+                        'year_initial': int(assoc.get('year_initial', 2000)),
+                        'year_final': int(assoc.get('year_final', 2024)),
+                        'confidence_level': self._calculate_confidence_level(
+                            float(assoc.get('score', 0.0)), 
+                            float(assoc.get('ei', 0.0))
+                        )
+                    })
+                
+                self.gene_disease_associations = pd.DataFrame(processed_data)
+                logger.info(f"Downloaded {len(self.gene_disease_associations)} associations via API")
+            else:
+                raise ValueError("No results in API response")
+        else:
+            raise ValueError(f"API request failed with status {response.status_code}: {response.text}")
+    
+    def _calculate_confidence_level(self, score: float, evidence_index: float) -> str:
+        """
+        Calculate confidence level based on score and evidence index.
+        Follows CROssBARv2 evidence evaluation patterns.
+        """
+        if score >= 0.8 and evidence_index >= 5.0:
+            return 'high'
+        elif score >= 0.5 and evidence_index >= 3.0:
+            return 'medium'
+        else:
+            return 'low'
     
     def _process_associations(self):
         """

@@ -51,13 +51,37 @@ from adapters import (
     # OpenTargets adapter
     OpenTargetsAdapter,
     OpenTargetsNodeType,
-    OpenTargetsNodeField,
     OpenTargetsEdgeType,
+    OpenTargetsEdgeField,
+    # SideEffect adapter
+    SideEffectAdapter,
+    SideEffectNodeType,
+    SideEffectNodeField,
+    SideEffectEdgeType,
+    SideEffectEdgeField,
+    # Phenotype adapter
+    PhenotypeAdapter,
+    PhenotypeNodeType,
+    PhenotypeNodeField,
+    PhenotypeEdgeType,
+    PhenotypeEdgeField,
+    # Orthology adapter
+    OrthologyAdapter,
+    OrthologyNodeType,
+    OrthologyNodeField,
+    OrthologyEdgeType,
+    OrthologyEdgeField,
+    # PPI adapter
+    PPIAdapter,
+    PPINodeType,
+    PPINodeField,
+    PPIEdgeType,
+    PPIEdgeField,
     # Check which adapters are available
     _adapters_available,
 )
 
-# Configure logging
+# Configure logging first
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -95,7 +119,7 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
                 'node_fields': [
                     UniprotNodeField.PROTEIN_NAME,
                     UniprotNodeField.GENE_NAMES,
-                    UniprotNodeField.ORGANISM,
+                    UniprotNodeField.ORGANISM_NAME,
                     UniprotNodeField.LENGTH,
                     UniprotNodeField.FUNCTION,
                 ],
@@ -123,8 +147,8 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
                     ChemblNodeField.TARGET_TYPE,
                 ],
                 'edge_types': [
-                    ChemblEdgeType.DRUG_TARGETS,
-                    ChemblEdgeType.COMPOUND_TARGETS,
+                    ChemblEdgeType.COMPOUND_TARGETS_PROTEIN,
+                    ChemblEdgeType.DRUG_TREATS_DISEASE,
                 ],
                 'test_mode': test_mode,
             }
@@ -143,7 +167,7 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
                     DiseaseNodeField.SYNONYMS,
                     DiseaseNodeField.XREFS,
                 ],
-                'edge_types': [DiseaseEdgeType.IS_A],
+                'edge_types': [DiseaseEdgeType.DISEASE_IS_A_DISEASE],
                 'test_mode': test_mode,
             }
         )
@@ -155,6 +179,7 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
             adapter_class=StringAdapter,
             config={
                 'organism': '9606',  # Human
+                'node_types': [],  # Usually empty - proteins come from UniProt
                 'edge_types': [
                     StringEdgeType.PROTEIN_PROTEIN_INTERACTION,
                 ],
@@ -163,7 +188,7 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
                     StringEdgeField.EXPERIMENTAL_SCORE,
                     StringEdgeField.DATABASE_SCORE,
                 ],
-                'score_threshold': 0.7,
+                'score_threshold': "high_confidence",  # CROssBARv2 approach: biologically meaningful threshold
                 'test_mode': test_mode,
             }
         )
@@ -176,9 +201,7 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
             config={
                 'organism': '9606',
                 'node_types': [
-                    GONodeType.MOLECULAR_FUNCTION,
-                    GONodeType.BIOLOGICAL_PROCESS,
-                    GONodeType.CELLULAR_COMPONENT,
+                    GONodeType.GO_TERM,
                 ],
                 'node_fields': [
                     GONodeField.NAME,
@@ -186,9 +209,10 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
                     GONodeField.DEFINITION,
                 ],
                 'edge_types': [
-                    GOEdgeType.IS_A,
-                    GOEdgeType.PART_OF,
-                    GOEdgeType.REGULATES,
+                    GOEdgeType.GO_TERM_IS_A_GO_TERM,
+                    GOEdgeType.GO_TERM_PART_OF_GO_TERM,
+                    GOEdgeType.GO_TERM_REGULATES_GO_TERM,
+                    GOEdgeType.PROTEIN_TO_GO_TERM,
                 ],
                 'test_mode': test_mode,
             }
@@ -206,7 +230,7 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
                     ReactomeNodeField.NAME,
                     ReactomeNodeField.SPECIES,
                 ],
-                'edge_types': [ReactomeEdgeType.CHILD_PATHWAY],
+                'edge_types': [ReactomeEdgeType.PATHWAY_CHILD_OF_PATHWAY, ReactomeEdgeType.PROTEIN_IN_PATHWAY],
                 'test_mode': test_mode,
             }
         )
@@ -217,9 +241,10 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
             name='DisGeNET',
             adapter_class=DisGeNETAdapter,
             config={
+                'node_types': [],  # Usually empty - genes and diseases come from other adapters
                 'edge_types': [DisGeNETEdgeType.GENE_DISEASE_ASSOCIATION],
                 'edge_fields': [
-                    DisGeNETEdgeField.SCORE,
+                    DisGeNETEdgeField.GENE_DISEASE_SCORE,
                     DisGeNETEdgeField.EVIDENCE_INDEX,
                     DisGeNETEdgeField.SOURCE,
                 ],
@@ -228,25 +253,112 @@ def get_adapter_configs(test_mode: bool = False) -> Dict[str, AdapterConfig]:
             }
         )
     
-    # OpenTargets configuration
+    # OpenTargets configuration - CROssBARv2 approach
     if _adapters_available.get('opentargets', False):
         configs['opentargets'] = AdapterConfig(
             name='OpenTargets',
             adapter_class=OpenTargetsAdapter,
             config={
-                'node_types': [
-                    OpenTargetsNodeType.TARGET,
-                    OpenTargetsNodeType.DISEASE,
-                ],
-                'node_fields': [
-                    OpenTargetsNodeField.TARGET_ID,
-                    OpenTargetsNodeField.TARGET_SYMBOL,
-                    OpenTargetsNodeField.DISEASE_ID,
-                    OpenTargetsNodeField.DISEASE_NAME,
-                ],
+                'node_types': [],  # CROssBARv2: no nodes, only edges
                 'edge_types': [OpenTargetsEdgeType.TARGET_DISEASE_ASSOCIATION],
+                'edge_fields': [
+                    OpenTargetsEdgeField.OPENTARGETS_SCORE,
+                    OpenTargetsEdgeField.SOURCE,
+                    OpenTargetsEdgeField.EVIDENCE_COUNT,
+                ],
+                'score_threshold': 0.0,  # CROssBARv2 approach: filter != 0.0
                 'test_mode': test_mode,
-                'use_real_data': os.environ.get('OPENTARGETS_USE_REAL_DATA', 'false').lower() == 'true',
+            }
+        )
+    
+    # SideEffect configuration - CROssBARv2 approach
+    if _adapters_available.get('side_effect', False):
+        configs['side_effect'] = AdapterConfig(
+            name='SideEffect',
+            adapter_class=SideEffectAdapter,
+            config={
+                'node_types': [SideEffectNodeType.SIDE_EFFECT],  # Authoritative source for side effects
+                'node_fields': [
+                    SideEffectNodeField.NAME,
+                    SideEffectNodeField.MEDDRA_ID,
+                    SideEffectNodeField.CATEGORY,
+                    SideEffectNodeField.SYNONYMS,
+                ],
+                'edge_types': [SideEffectEdgeType.DRUG_HAS_SIDE_EFFECT],
+                'edge_fields': [
+                    SideEffectEdgeField.FREQUENCY,
+                    SideEffectEdgeField.PROPORTIONAL_REPORTING_RATIO,
+                    SideEffectEdgeField.SOURCE,
+                ],
+                'frequency_threshold': 0.0,  # Minimum frequency threshold
+                'test_mode': test_mode,
+            }
+        )
+    
+    # Phenotype configuration - CROssBARv2 approach
+    if _adapters_available.get('phenotype', False):
+        configs['phenotype'] = AdapterConfig(
+            name='Phenotype',
+            adapter_class=PhenotypeAdapter,
+            config={
+                'node_types': [PhenotypeNodeType.PHENOTYPE],  # Authoritative source for phenotypes
+                'node_fields': [
+                    PhenotypeNodeField.NAME,
+                    PhenotypeNodeField.SYNONYMS,
+                    PhenotypeNodeField.DEFINITION,
+                ],
+                'edge_types': [
+                    PhenotypeEdgeType.PROTEIN_TO_PHENOTYPE,
+                    PhenotypeEdgeType.PHENOTYPE_IS_A_PHENOTYPE,
+                    PhenotypeEdgeType.PHENOTYPE_TO_DISEASE,
+                ],
+                'edge_fields': [
+                    PhenotypeEdgeField.EVIDENCE_CODE,
+                    PhenotypeEdgeField.RELATIONSHIP_TYPE,
+                    PhenotypeEdgeField.PUBMED_IDS,
+                ],
+                'test_mode': test_mode,
+            }
+        )
+    
+    # Orthology configuration - CROssBARv2 approach
+    if _adapters_available.get('orthology', False):
+        configs['orthology'] = AdapterConfig(
+            name='Orthology',
+            adapter_class=OrthologyAdapter,
+            config={
+                'node_types': [],  # CROssBARv2: no nodes, only edges between existing genes
+                'edge_types': [OrthologyEdgeType.GENE_ORTHOLOGOUS_WITH_GENE],
+                'edge_fields': [
+                    OrthologyEdgeField.SOURCE,
+                    OrthologyEdgeField.RELATION_TYPE,
+                    OrthologyEdgeField.OMA_ORTHOLOGY_SCORE,
+                    OrthologyEdgeField.SOURCE_ORGANISM,
+                    OrthologyEdgeField.TARGET_ORGANISM,
+                ],
+                'target_organisms': [10090, 10116, 7955, 7227],  # Mouse, rat, zebrafish, fruitfly
+                'test_mode': test_mode,
+            }
+        )
+    
+    # PPI configuration - CROssBARv2 approach
+    if _adapters_available.get('ppi', False):
+        configs['ppi'] = AdapterConfig(
+            name='PPI',
+            adapter_class=PPIAdapter,
+            config={
+                'node_types': [],  # CROssBARv2: no nodes, only edges between existing proteins
+                'edge_types': [PPIEdgeType.PROTEIN_PROTEIN_INTERACTION],
+                'edge_fields': [
+                    PPIEdgeField.SOURCE,
+                    PPIEdgeField.PUBMED_IDS,
+                    PPIEdgeField.INTACT_SCORE,
+                    PPIEdgeField.METHODS,
+                    PPIEdgeField.INTERACTION_TYPES,
+                    PPIEdgeField.EXPERIMENTAL_SYSTEM,
+                ],
+                'organism': 9606,  # Human
+                'test_mode': test_mode,
             }
         )
     
@@ -296,7 +408,11 @@ def run_adapters(adapter_names: List[str], test_mode: bool = False):
             # Process nodes if adapter provides them
             if hasattr(adapter, 'get_nodes'):
                 logger.info(f"Processing {config.name} nodes...")
-                bc.write_nodes(adapter.get_nodes())
+                try:
+                    bc.write_nodes(adapter.get_nodes())
+                except StopIteration:
+                    # This is expected for edge-only adapters (STRING, OpenTargets)
+                    logger.debug(f"{config.name} adapter has no nodes (edge-only adapter)")
             
             # Process edges if adapter provides them
             if hasattr(adapter, 'get_edges'):
@@ -309,9 +425,25 @@ def run_adapters(adapter_names: List[str], test_mode: bool = False):
             logger.error(f"✗ {config.name} adapter failed: {e}")
             logger.debug("Error details:", exc_info=True)
     
-    # Finalize
-    bc.write_import_call()
-    bc.summary()
+    # Finalize - only if data was written
+    try:
+        # Check if any data was actually written
+        if hasattr(bc, '_writer') and bc._writer is not None:
+            bc.write_import_call()
+            bc.summary()
+        else:
+            logger.warning("No data was written by any adapters - skipping import call generation")
+            logger.info("This usually happens when:")
+            logger.info("  1. Adapters only generate edges but no nodes were created")
+            logger.info("  2. All requested node_types are empty lists")
+            logger.info("  3. Adapters failed to generate any output")
+            logger.info("Consider running adapters that generate nodes (uniprot, chembl, disease, etc.)")
+    except AttributeError as e:
+        logger.warning(f"Could not write import call: {e}")
+        logger.info("This is usually because no CSV files were generated")
+    except Exception as e:
+        logger.error(f"Error during finalization: {e}")
+        logger.debug("Finalization error details:", exc_info=True)
 
 
 def main():

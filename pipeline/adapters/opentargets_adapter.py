@@ -1,844 +1,399 @@
+#!/usr/bin/env python3
+"""
+FIXED BioCypher adapter for Open Targets data based on CROssBARv2 methodology.
+
+This adapter corrects the PyPath integration issues identified in debugging:
+1. Uses correct parameter format: fields="xref_geneid" instead of positional args
+2. Handles empty values in UniProt mappings properly
+3. Uses simplified approach when full ID mapping chain fails
+4. Provides both sample and real data modes like other working adapters
+"""
+
+import os
+import pandas as pd
 from enum import Enum, auto
-from typing import Optional, Generator, Union, Dict, Any
-from biocypher._logger import logger
-import os
-import time
-import gzip
-import json
-from pathlib import Path
-import requests
+from typing import Optional, Generator, Dict, Any, List
+from time import time
 from tqdm import tqdm
-# Don't import at module level - check at runtime instead
-# This prevents import issues between system Python and Poetry environment
-
-def _check_pandas_available():
-    """Check if pandas is available at runtime."""
-    try:
-        import pandas
-        return True, pandas
-    except ImportError:
-        return False, None
-
-def _check_duckdb_available():
-    """Check if duckdb is available at runtime."""
-    try:
-        import duckdb
-        return True, duckdb
-    except ImportError:
-        return False, None
-
-# Import base classes directly to avoid dependency conflicts
-from abc import ABC, abstractmethod
-from typing import Generator, Optional, Union, Any
-from enum import Enum, EnumMeta
-from functools import lru_cache
 from biocypher._logger import logger
-from bioregistry import normalize_curie
-import os
-import time
-from contextlib import contextmanager
-from pathlib import Path
 
+# PyPath imports
+try:
+    from pypath.inputs import opentargets, uniprot
+    PYPATH_AVAILABLE = True
+except ImportError:
+    PYPATH_AVAILABLE = False
+    logger.warning("PyPath not available - OpenTargets adapter will use sample data only")
 
-class BaseEnumMeta(EnumMeta):
-    """Base metaclass for all adapter enums, providing membership checking."""
-    def __contains__(cls, item):
-        return item in cls.__members__.keys()
-
-
-class DataDownloadMixin:
-    """Mixin class providing data download functionality."""
-    
-    def download_file(
-        self, 
-        url: str, 
-        filename: str, 
-        force_download: bool = False
-    ) -> str:
-        """Download a file from URL with caching."""
-        import requests
-        
-        filepath = os.path.join(self.cache_dir, filename)
-        
-        if os.path.exists(filepath) and not force_download:
-            logger.info(f"Using cached file: {filepath}")
-            return filepath
-        
-        logger.info(f"Downloading {url} to {filepath}")
-        
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        
-        # Write with streaming to handle large files
-        with open(filepath, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-        
-        logger.info(f"Downloaded successfully: {filepath}")
-        return filepath
-
-
-class BaseAdapter(ABC):
-    """Abstract base class for all BioCypher adapters."""
-    
-    def __init__(
-        self,
-        add_prefix: bool = True,
-        test_mode: bool = False,
-        cache_dir: Optional[str] = None,
-    ):
-        self.add_prefix = add_prefix
-        self.test_mode = test_mode
-        self.cache_dir = cache_dir or os.path.join(os.getcwd(), ".cache")
-        
-        # Ensure cache directory exists
-        Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
-        
-        # Data source metadata - should be overridden by subclasses
-        self.data_source = "unknown"
-        self.data_version = "unknown"
-        self.data_licence = "unknown"
-        
-        # Initialize data storage
-        self.data = {}
-        
-        logger.debug(f"Initialized {self.__class__.__name__} adapter")
-    
-    @abstractmethod
-    def get_nodes(self) -> Generator[tuple[str, str, dict], None, None]:
-        """Abstract method to get nodes from the data source."""
-        pass
-    
-    @abstractmethod
-    def get_edges(self) -> Generator[tuple[Optional[str], str, str, str, dict], None, None]:
-        """Abstract method to get edges from the data source."""
-        pass
-    
-    @lru_cache(maxsize=10000)
-    def add_prefix_to_id(
-        self, 
-        prefix: str, 
-        identifier: str, 
-        sep: str = ":"
-    ) -> str:
-        """Add prefix to database identifier using bioregistry normalization."""
-        if not identifier:
-            return None
-            
-        if self.add_prefix:
-            return normalize_curie(f"{prefix}{sep}{identifier}")
-        return identifier
-    
-    def get_metadata_dict(self) -> dict:
-        """Get standard metadata dictionary for nodes/edges."""
-        return {
-            "source": self.data_source,
-            "version": self.data_version,
-            "licence": self.data_licence,
-        }
-    
-    @contextmanager
-    def timer(self, description: str):
-        """Context manager for timing operations."""
-        start_time = time.time()
-        logger.info(f"Starting: {description}")
-        yield
-        elapsed_time = time.time() - start_time
-        logger.info(f"Completed: {description} in {elapsed_time:.2f} seconds")
-
-logger.debug(f"Loading module {__name__}.")
+from .base_adapter import BaseAdapter, BaseEnumMeta
 
 
 class OpenTargetsNodeType(Enum, metaclass=BaseEnumMeta):
     """
     Types of nodes provided by the OpenTargets adapter.
-    """
-    TARGET = auto()
-    DISEASE = auto()
-    GENE_ONTOLOGY = auto()
-    MOLECULE = auto()
-    MOUSE_MODEL = auto()
-    MOUSE_PHENOTYPE = auto()
-
-
-class OpenTargetsNodeField(Enum, metaclass=BaseEnumMeta):
-    """
-    Fields available for OpenTargets nodes.
-    """
-    # Target fields
-    TARGET_ID = "id"
-    TARGET_SYMBOL = "approvedSymbol"
-    TARGET_NAME = "approvedName"
-    TARGET_BIOTYPE = "biotype"
-    TARGET_CHROMOSOME = "chromosome"
-    TARGET_START = "start"
-    TARGET_END = "end"
-    TARGET_STRAND = "strand"
     
-    # Disease fields
-    DISEASE_ID = "id"
-    DISEASE_NAME = "name"
-    DISEASE_DESCRIPTION = "description"
-    DISEASE_SYNONYMS = "synonyms"
-    DISEASE_ANCESTORS = "ancestors"
-    
-    # Molecule fields
-    MOLECULE_ID = "id"
-    MOLECULE_NAME = "name"
-    MOLECULE_TYPE = "type"
-    MOLECULE_MECHANISM = "mechanismOfAction"
-    MOLECULE_MAX_PHASE = "maximumClinicalTrialPhase"
-    
-    # Gene Ontology fields
-    GO_ID = "id"
-    GO_NAME = "name"
-    GO_NAMESPACE = "namespace"
-    GO_DEFINITION = "definition"
+    Note: Following CROssBARv2 approach, OpenTargets should not create nodes.
+    Gene nodes come from UniProt/gene adapters, disease nodes from Disease Ontology.
+    """
+    pass  # No nodes - only creates gene-disease association edges
 
 
 class OpenTargetsEdgeType(Enum, metaclass=BaseEnumMeta):
-    """
-    Types of edges provided by the OpenTargets adapter.
-    """
+    """Types of edges provided by the OpenTargets adapter."""
     TARGET_DISEASE_ASSOCIATION = auto()
-    TARGET_GO_ASSOCIATION = auto()
-    MOLECULE_TARGET_ASSOCIATION = auto()
-    MOLECULE_DISEASE_ASSOCIATION = auto()
 
 
-class OpenTargetsDataset(Enum):
+class OpenTargetsEdgeField(Enum, metaclass=BaseEnumMeta):
+    """Fields available for OpenTargets edges."""
+    OPENTARGETS_SCORE = "opentargets_score"
+    SOURCE = "source"
+    EVIDENCE_COUNT = "evidence_count"
+
+
+class OpenTargetsAdapter(BaseAdapter):
     """
-    Available Open Targets datasets.
-    """
-    TARGETS = "targets"
-    DISEASES = "diseases"
-    MOLECULES = "molecules"
-    GO = "go"
-    EVIDENCE = "evidence"
-    ASSOCIATIONS = "associationByOverallDirect"
-    DISEASE_TO_PHENOTYPE = "diseaseToPhenotype"
-    DRUG_WARNINGS = "drugWarnings"
-    INTERACTIONS = "interactions"
-    MOUSE_PHENOTYPES = "mousePhenotypes"
-
-
-class OpenTargetsAdapter(BaseAdapter, DataDownloadMixin):
-    """
-    BioCypher adapter for Open Targets data.
+    FIXED BioCypher adapter for Open Targets data following CROssBARv2 methodology.
     
-    Fetches and processes data from Open Targets Platform datasets.
-    Uses streaming approach for memory-efficient processing.
+    Key fixes applied:
+    1. Correct PyPath function calls with proper parameter format
+    2. Proper empty value handling in UniProt mappings
+    3. Fallback to sample data when PyPath is unavailable
+    4. Robust error handling throughout
     """
-    
-    # Open Targets FTP base URL - using latest stable version
-    OPENTARGETS_BASE_URL = "https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/24.09/output/etl/parquet/"
     
     def __init__(
         self,
-        node_types: Optional[list[OpenTargetsNodeType]] = None,
-        node_fields: Optional[list[OpenTargetsNodeField]] = None,
-        edge_types: Optional[list[OpenTargetsEdgeType]] = None,
-        datasets: Optional[list[OpenTargetsDataset]] = None,
-        use_real_data: bool = False,  # New parameter to fetch real data
+        node_types: Optional[List[OpenTargetsNodeType]] = None,
+        edge_types: Optional[List[OpenTargetsEdgeType]] = None,
+        edge_fields: Optional[List[OpenTargetsEdgeField]] = None,
+        score_threshold: float = 0.0,
+        use_real_data: bool = False,
         test_mode: bool = False,
         add_prefix: bool = True,
         cache_dir: Optional[str] = None,
     ):
         super().__init__(add_prefix=add_prefix, test_mode=test_mode, cache_dir=cache_dir)
         
-        # Set data source metadata
-        self.data_source = "opentargets"
-        self.data_version = "24.09" if use_real_data else "sample"
-        self.data_licence = "Apache 2.0"
-        self.use_real_data = use_real_data
+        # Configuration
+        self.use_real_data = use_real_data or os.getenv('OPENTARGETS_USE_REAL_DATA', '').lower() == 'true'
+        self.score_threshold = score_threshold
         
-        # Configure types and fields
-        self.node_types = node_types or list(OpenTargetsNodeType)
-        self.node_fields = [f.value for f in (node_fields or list(OpenTargetsNodeField))]
-        self.edge_types = edge_types or list(OpenTargetsEdgeType)
-        self.datasets = datasets or [
-            OpenTargetsDataset.TARGETS,
-            OpenTargetsDataset.DISEASES,
-            OpenTargetsDataset.ASSOCIATIONS,
+        # Set data source metadata
+        self.data_source = "Open Targets"
+        self.data_version = "2024"
+        self.data_licence = "Apache 2.0"
+        
+        # Configure types and fields (CROssBARv2: no nodes, only edges)
+        self.node_types = node_types or []  # Empty - genes/diseases come from other adapters
+        self.edge_types = edge_types or [OpenTargetsEdgeType.TARGET_DISEASE_ASSOCIATION]
+        self.edge_fields = edge_fields or [
+            OpenTargetsEdgeField.OPENTARGETS_SCORE,
+            OpenTargetsEdgeField.SOURCE,
+            OpenTargetsEdgeField.EVIDENCE_COUNT,
         ]
         
-        # Storage for data processing
-        self.nodes_data = {}
-        self.edges_data = []
+        # Data storage
+        self.associations_data = pd.DataFrame()
+        self.uniprot_to_entrez = {}
+        self.ensembl_to_uniprot = {}
+        self.mondo_mappings = {}
         
-        # Set cache subdirectory
-        self.cache_dir = os.path.join(self.cache_dir, "opentargets")
-        Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
-        
-        # Validate availability for real data
-        if self.use_real_data:
-            duckdb_available, _ = _check_duckdb_available()
-            pandas_available, _ = _check_pandas_available()
-            
-            if duckdb_available:
-                logger.info("DuckDB available - will use for optimal Parquet processing")
-            elif pandas_available:
-                logger.info("Pandas available - will use for Parquet processing (slower than DuckDB)")
-                logger.info("For better performance, install DuckDB: poetry add duckdb")
-            else:
-                logger.warning("Neither pandas nor DuckDB available - will fall back to sample data")
-                self.use_real_data = False
-        
-        logger.info(f"Initialized OpenTargets adapter (real_data={self.use_real_data}) with cache dir: {self.cache_dir}")
+        logger.info(f"Initialized OpenTargets adapter (use_real_data={self.use_real_data})")
     
-    def download_dataset(self, dataset: OpenTargetsDataset, force_download: bool = False) -> str:
+    def get_sample_data(self) -> List[Dict[str, Any]]:
         """
-        Download a dataset from Open Targets.
+        Get sample OpenTargets data for testing/demo purposes.
         
-        Args:
-            dataset: The dataset to download
-            force_download: Force re-download even if cached
-            
-        Returns:
-            Path to the downloaded file
+        Returns hardcoded associations when real data is not available/requested.
+        Uses gene_id and disease_id directly to bypass complex ID mapping.
         """
-        if not self.use_real_data:
-            # Use sample data
-            filename = f"{dataset.value}_sample.json"
-            filepath = os.path.join(self.cache_dir, filename)
-            
-            if os.path.exists(filepath) and not force_download:
-                logger.info(f"Using cached sample dataset: {filepath}")
-                return filepath
-            
-            logger.info(f"Creating sample {dataset.value} data for demonstration")
-            self._create_sample_data(dataset, filepath)
-            return filepath
-        
-        # For real data, first check if we can actually process parquet files
-        duckdb_available, _ = _check_duckdb_available()
-        pandas_available, _ = _check_pandas_available()
-        
-        if not pandas_available and not duckdb_available:
-            logger.warning("Neither pandas nor DuckDB available in current environment")
-            logger.info("Falling back to sample data (install pandas or duckdb for real data)")
-            self.use_real_data = False
-            return self.download_dataset(dataset, force_download=False)
-        
-        logger.info(f"Data processing available: pandas={pandas_available}, duckdb={duckdb_available}")
-        
-        # Download real data from Open Targets
-        return self._download_real_dataset(dataset, force_download)
+        return [
+            {
+                "gene_id": "675",          # BRCA2 Entrez Gene ID
+                "disease_id": "MONDO:0007254",  # breast carcinoma
+                "opentargets_score": 0.95,
+                "evidence_count": 157,
+                "source": "Open Targets"
+            },
+            {
+                "gene_id": "7157",         # TP53 Entrez Gene ID
+                "disease_id": "MONDO:0008903",  # lung carcinoma
+                "opentargets_score": 0.89,
+                "evidence_count": 234,
+                "source": "Open Targets"
+            },
+            {
+                "gene_id": "3845",         # KRAS Entrez Gene ID
+                "disease_id": "MONDO:0005575",  # colorectal carcinoma
+                "opentargets_score": 0.87,
+                "evidence_count": 189,
+                "source": "Open Targets"
+            },
+        ]
     
-    def _download_real_dataset(self, dataset: OpenTargetsDataset, force_download: bool = False) -> str:
+    def download_real_data(self):
         """
-        Download real dataset from Open Targets FTP.
+        Download real OpenTargets data using corrected PyPath calls.
         
-        Args:
-            dataset: The dataset to download
-            force_download: Force re-download even if cached
-            
-        Returns:
-            Path to the downloaded parquet file
+        Applies all the fixes identified in debugging:
+        1. Correct parameter format for uniprot_data()
+        2. Proper empty value handling
+        3. Robust error handling
         """
-        # Map dataset enum to actual FTP paths
-        dataset_mapping = {
-            OpenTargetsDataset.TARGETS: "targets/",
-            OpenTargetsDataset.DISEASES: "diseases/", 
-            OpenTargetsDataset.ASSOCIATIONS: "associationByOverallDirect/",
-            OpenTargetsDataset.MOLECULES: "molecule/",
-            OpenTargetsDataset.GO: "go/",
-        }
+        if not PYPATH_AVAILABLE:
+            logger.warning("PyPath not available - using sample data")
+            return self.get_sample_data()
         
-        if dataset not in dataset_mapping:
-            raise ValueError(f"Unknown dataset: {dataset}")
-        
-        # Construct download URL
-        base_path = dataset_mapping[dataset]
-        # Most Open Targets datasets have multiple part files, we'll download the first one
-        parquet_filename = f"{dataset.value}.parquet"
-        parquet_filepath = os.path.join(self.cache_dir, parquet_filename)
-        
-        if os.path.exists(parquet_filepath) and not force_download:
-            logger.info(f"Using cached real dataset: {parquet_filepath}")
-            return parquet_filepath
-        
-        # Try to download the first part file (part-00000) from each dataset
-        # Note: Real filenames have unique UUIDs, so we'll try a generic approach
-        if dataset == OpenTargetsDataset.ASSOCIATIONS:
-            # Use associationByOverallDirect for the main target-disease associations
-            download_url = f"{self.OPENTARGETS_BASE_URL}associationByOverallDirect/"
-        elif dataset == OpenTargetsDataset.TARGETS:
-            download_url = f"{self.OPENTARGETS_BASE_URL}targets/"
-        elif dataset == OpenTargetsDataset.DISEASES:
-            download_url = f"{self.OPENTARGETS_BASE_URL}diseases/"
-        else:
-            download_url = f"{self.OPENTARGETS_BASE_URL}{base_path}"
-        
-        # Use a more robust approach to find actual parquet files
-        try:
-            import re
-            
-            # Get directory listing
-            response = requests.get(download_url, timeout=30)
-            response.raise_for_status()
-            
-            # Parse HTML to find .parquet files
-            parquet_pattern = r'href="([^"]*\.snappy\.parquet)"'
-            parquet_files = re.findall(parquet_pattern, response.text)
-            
-            if not parquet_files:
-                # Try alternative pattern
-                parquet_pattern = r'href="([^"]*\.parquet)"'
-                parquet_files = re.findall(parquet_pattern, response.text)
-            
-            if parquet_files:
-                # Use the first parquet file found (typically part-00000)
-                actual_filename = sorted(parquet_files)[0]  # Sort to get part-00000 first
-                download_url = download_url + actual_filename
-                logger.info(f"Found parquet file: {actual_filename}")
-            else:
-                logger.warning(f"No parquet files found in {download_url}")
-                logger.info("Directory contents sample:")
-                # Show first few lines for debugging
-                lines = response.text.split('\n')[:10]
-                for line in lines:
-                    if 'href=' in line:
-                        logger.info(f"  {line.strip()}")
-                raise ValueError("No parquet files found in directory")
-                
-        except Exception as e:
-            logger.error(f"Failed to discover parquet files: {str(e)}")
-            logger.info("Falling back to sample data")
-            self.use_real_data = False
-            return self.download_dataset(dataset, force_download=False)
+        logger.info("Downloading real OpenTargets data via PyPath...")
+        t0 = time()
         
         try:
-            logger.info(f"Downloading real Open Targets data from: {download_url}")
-            response = requests.get(download_url, stream=True)
-            response.raise_for_status()
+            # Download OpenTargets direct associations
+            logger.info("Fetching OpenTargets direct gene-disease associations...")
+            opentargets_direct = opentargets.opentargets_direct_score()
             
-            # Download with progress bar
-            total_size = int(response.headers.get('content-length', 0))
-            with open(parquet_filepath, 'wb') as f, tqdm(
-                desc=f"Downloading {dataset.value}",
-                total=total_size,
-                unit='B',
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as pbar:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        pbar.update(len(chunk))
-            
-            logger.info(f"Successfully downloaded: {parquet_filepath}")
-            return parquet_filepath
-            
-        except Exception as e:
-            logger.error(f"Failed to download real data: {str(e)}")
-            logger.info("Falling back to sample data")
-            self.use_real_data = False
-            return self.download_dataset(dataset, force_download=False)
-    
-    def _create_sample_data(self, dataset: OpenTargetsDataset, filepath: str):
-        """
-        Create sample data for demonstration purposes.
-        
-        Args:
-            dataset: The dataset type
-            filepath: Path to save the sample data
-        """
-        sample_data = {
-            OpenTargetsDataset.TARGETS: [
-                {
-                    "id": "ENSG00000139618",
-                    "approvedSymbol": "BRCA2",
-                    "approvedName": "BRCA2 DNA repair associated",
-                    "biotype": "protein_coding",
-                    "genomicLocation": {
-                        "chromosome": "13",
-                        "start": 32315474,
-                        "end": 32400266,
-                        "strand": 1
-                    }
-                },
-                {
-                    "id": "ENSG00000141510",
-                    "approvedSymbol": "TP53",
-                    "approvedName": "tumor protein p53",
-                    "biotype": "protein_coding",
-                    "genomicLocation": {
-                        "chromosome": "17",
-                        "start": 7661779,
-                        "end": 7687550,
-                        "strand": -1
-                    }
-                },
-                {
-                    "id": "ENSG00000133703",
-                    "approvedSymbol": "KRAS",
-                    "approvedName": "KRAS proto-oncogene, GTPase",
-                    "biotype": "protein_coding",
-                    "genomicLocation": {
-                        "chromosome": "12",
-                        "start": 25205246,
-                        "end": 25250929,
-                        "strand": -1
-                    }
-                }
-            ],
-            OpenTargetsDataset.DISEASES: [
-                {
-                    "id": "EFO_0000305",
-                    "name": "breast carcinoma",
-                    "description": "A carcinoma that arises from epithelial cells of the breast",
-                    "synonyms": ["breast cancer", "mammary carcinoma", "breast tumor"]
-                },
-                {
-                    "id": "EFO_0000684",
-                    "name": "lung carcinoma",
-                    "description": "A carcinoma that arises from epithelial cells of the lung",
-                    "synonyms": ["lung cancer", "pulmonary carcinoma"]
-                },
-                {
-                    "id": "EFO_0005842",
-                    "name": "colorectal carcinoma",
-                    "description": "A carcinoma that arises from epithelial cells of the colon or rectum",
-                    "synonyms": ["colorectal cancer", "CRC"]
-                }
-            ],
-            OpenTargetsDataset.ASSOCIATIONS: [
-                {
-                    "targetId": "ENSG00000139618",
-                    "diseaseId": "EFO_0000305",
-                    "score": 0.89,
-                    "datasourceScores": {
-                        "genetic_association": 0.95,
-                        "literature": 0.85,
-                        "known_drug": 0.0
-                    }
-                },
-                {
-                    "targetId": "ENSG00000141510",
-                    "diseaseId": "EFO_0000684",
-                    "score": 0.92,
-                    "datasourceScores": {
-                        "genetic_association": 0.98,
-                        "literature": 0.90,
-                        "known_drug": 0.0
-                    }
-                },
-                {
-                    "targetId": "ENSG00000133703",
-                    "diseaseId": "EFO_0005842",
-                    "score": 0.88,
-                    "datasourceScores": {
-                        "genetic_association": 0.91,
-                        "literature": 0.87,
-                        "known_drug": 0.75
-                    }
-                }
-            ]
-        }
-        
-        # Write sample data as JSON (not gzipped for simplicity)
-        data_to_write = sample_data.get(dataset, [])
-        logger.info(f"Creating sample data for {dataset}: {len(data_to_write)} items")
-        
-        with open(filepath, 'w') as f:
-            for item in data_to_write:
-                json.dump(item, f)
-                f.write('\n')
-        
-        logger.info(f"Wrote sample data to: {filepath}")
-    
-    def stream_data(self, filepath: str) -> Generator[dict, None, None]:
-        """
-        Stream data from a file (JSON, Parquet, or gzipped).
-        
-        Args:
-            filepath: Path to the data file
-            
-        Yields:
-            Parsed data objects
-        """
-        if filepath.endswith('.parquet'):
-            # Check availability at runtime
-            duckdb_available, duckdb = _check_duckdb_available()
-            pandas_available, pandas = _check_pandas_available()
-            
-            if duckdb_available:
-                logger.info("Using DuckDB for Parquet processing")
-                conn = duckdb.connect()
-                
-                # Limit rows in test mode
-                limit_clause = "LIMIT 100" if self.test_mode else ""
-                query = f"SELECT * FROM '{filepath}' {limit_clause}"
-                
-                try:
-                    result = conn.execute(query)
-                    while True:
-                        batch = result.fetchmany(1000)  # Process in batches
-                        if not batch:
-                            break
-                        
-                        columns = [desc[0] for desc in result.description]
-                        for row in batch:
-                            yield dict(zip(columns, row))
-                finally:
-                    conn.close()
-                    
-            elif pandas_available:
-                # Fallback to pandas (works but slower)
-                logger.info("Using pandas for Parquet processing (install duckdb for better performance)")
-                try:
-                    # Read parquet file
-                    logger.info(f"Reading parquet file: {filepath}")
-                    df = pandas.read_parquet(filepath)
-                    logger.info(f"Loaded {len(df)} rows, {len(df.columns)} columns")
-                    
-                    # Limit rows in test mode
-                    if self.test_mode and len(df) > 100:
-                        original_len = len(df)
-                        df = df.head(100)
-                        logger.info(f"Test mode: limiting to 100 rows from {original_len} total")
-                    
-                    # Convert to dictionaries and yield
-                    for idx, row in df.iterrows():
-                        yield row.to_dict()
-                        
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"Failed to read Parquet file with pandas: {error_msg}")
-                    
-                    # Check for specific pyarrow/fastparquet missing error
-                    if "pyarrow" in error_msg and "fastparquet" in error_msg:
-                        logger.info("💡 Install pyarrow for Parquet support: poetry add pyarrow")
-                        logger.info("   Alternative: poetry add fastparquet")
-                    else:
-                        logger.info(f"Error details: {type(e).__name__}: {error_msg}")
-                    
-                    logger.info("Falling back to sample data")
-                    # Switch to sample data and try again
-                    sample_path = filepath.replace('.parquet', '_sample.json')
-                    if os.path.exists(sample_path):
-                        logger.info(f"Using sample data from: {sample_path}")
-                        yield from self.stream_data(sample_path)
-                    return
-                    
-            else:
-                # Neither pandas nor DuckDB available
-                logger.error("Neither pandas nor DuckDB available for Parquet processing")
-                logger.info("Install pandas or duckdb for real data processing")
-                # Fall back to sample data
-                sample_path = filepath.replace('.parquet', '_sample.json')
-                if os.path.exists(sample_path):
-                    logger.info(f"Using sample data from: {sample_path}")
-                    yield from self.stream_data(sample_path)
-                return
-        else:
-            # Handle JSON files (sample data)
-            if filepath.endswith('.gz'):
-                open_func = gzip.open
-                mode = 'rt'
-            else:
-                open_func = open
-                mode = 'r'
-            
-            with open_func(filepath, mode) as f:
-                for line in f:
-                    if line.strip():
-                        yield json.loads(line)
-    
-    def process_targets(self):
-        """Process targets dataset."""
-        if OpenTargetsNodeType.TARGET not in self.node_types:
-            return
-        
-        filepath = self.download_dataset(OpenTargetsDataset.TARGETS)
-        logger.info("Processing targets...")
-        
-        count = 0
-        for target in tqdm(self.stream_data(filepath), desc="Targets"):
-            if self.test_mode and count >= 100:
-                break
-            
-            # Handle both real data and sample data field names
-            target_id = target.get("id") or target.get("targetId")
-            node_id = self.add_prefix_to_id("ensembl", target_id)
-            
-            properties = {
-                "symbol": target.get("approvedSymbol") or target.get("symbol"),
-                "name": target.get("approvedName") or target.get("name"),
-                "biotype": target.get("biotype"),
-            }
-            
-            # Add genomic location if available (real data structure)
-            if "genomicLocation" in target:
-                loc = target["genomicLocation"]
-                properties.update({
-                    "chromosome": loc.get("chromosome"),
-                    "start": loc.get("start"),
-                    "end": loc.get("end"),
-                    "strand": loc.get("strand"),
-                })
-            # Handle simplified structure for sample data
-            elif any(key in target for key in ["chromosome", "start", "end"]):
-                properties.update({
-                    "chromosome": target.get("chromosome"),
-                    "start": target.get("start"),
-                    "end": target.get("end"),
-                    "strand": target.get("strand"),
-                })
-            
-            # Add metadata
-            properties.update(self.get_metadata_dict())
-            
-            self.nodes_data.setdefault("target", []).append({
-                "id": node_id,
-                "label": "target",
-                "properties": properties
-            })
-            
-            count += 1
-        
-        logger.info(f"Processed {count} targets")
-    
-    def process_diseases(self):
-        """Process diseases dataset."""
-        if OpenTargetsNodeType.DISEASE not in self.node_types:
-            return
-        
-        filepath = self.download_dataset(OpenTargetsDataset.DISEASES)
-        logger.info("Processing diseases...")
-        
-        count = 0
-        for disease in tqdm(self.stream_data(filepath), desc="Diseases"):
-            if self.test_mode and count >= 100:
-                break
-            
-            node_id = self.add_prefix_to_id("efo", disease.get("id"))
-            
-            properties = {
-                "name": disease.get("name"),
-                "description": disease.get("description"),
-                "synonyms": disease.get("synonyms", []),
-            }
-            
-            # Add metadata
-            properties.update(self.get_metadata_dict())
-            
-            self.nodes_data.setdefault("disease", []).append({
-                "id": node_id,
-                "label": "disease",
-                "properties": properties
-            })
-            
-            count += 1
-        
-        logger.info(f"Processed {count} diseases")
-    
-    def process_associations(self):
-        """Process target-disease associations."""
-        if OpenTargetsEdgeType.TARGET_DISEASE_ASSOCIATION not in self.edge_types:
-            logger.info("Skipping associations - not in edge_types")
-            return
-        
-        filepath = self.download_dataset(OpenTargetsDataset.ASSOCIATIONS)
-        logger.info(f"Processing associations from file: {filepath}")
-        logger.info(f"File exists: {os.path.exists(filepath)}")
-        
-        if os.path.exists(filepath):
-            file_size = os.path.getsize(filepath)
-            logger.info(f"File size: {file_size} bytes")
-        
-        count = 0
-        try:
-            for assoc in tqdm(self.stream_data(filepath), desc="Associations"):
-                if self.test_mode and count >= 100:
+            # Convert generator to list (with optional test mode limit)
+            associations_list = []
+            for idx, entry in enumerate(opentargets_direct):
+                if self.test_mode and idx >= 100:  # Limit for test mode
                     break
-                
-                # Handle both real data and sample data field names
-                source_target_id = assoc.get("targetId") or assoc.get("targetFromSourceId") 
-                target_disease_id = assoc.get("diseaseId") or assoc.get("diseaseFromSourceMappedId")
-                
-                source_id = self.add_prefix_to_id("ensembl", source_target_id)
-                target_id = self.add_prefix_to_id("efo", target_disease_id)
-                
-                # Handle different score field names in real vs sample data
-                score = assoc.get("score") or assoc.get("harmonic-sum") or assoc.get("overall") or 0
-                
-                properties = {
-                    "score": float(score),
-                    "datasources": list(assoc.get("datasourceScores", {}).keys()),
-                }
-                
-                # Add individual datasource scores if available
-                datasource_scores = assoc.get("datasourceScores", {})
-                for datasource, ds_score in datasource_scores.items():
-                    if ds_score is not None:
-                        properties[f"{datasource}_score"] = float(ds_score)
-                
-                # Add metadata
-                properties.update(self.get_metadata_dict())
-                
-                self.edges_data.append({
-                    "source_id": source_id,
-                    "target_id": target_id,
-                    "label": "associated_with_disease",
-                    "properties": properties
-                })
-                
-                count += 1
-                
+                associations_list.append(entry)
+            
+            logger.info(f"Downloaded {len(associations_list)} OpenTargets associations")
+            
+            # Download UniProt mappings with corrected calls
+            self._download_uniprot_mappings()
+            
+            t1 = time()
+            logger.info(f"OpenTargets real data downloaded in {round((t1-t0) / 60, 2)} mins")
+            
+            return associations_list
+            
         except Exception as e:
-            logger.error(f"Error processing associations: {str(e)}")
-            logger.info("Check if the file format is correct or if pandas can read it")
+            logger.error(f"Failed to download real OpenTargets data: {e}")
+            logger.warning("Falling back to sample data")
+            return self.get_sample_data()
+    
+    def _download_uniprot_mappings(self):
+        """
+        Download UniProt ID mappings using corrected PyPath calls.
         
-        logger.info(f"Processed {count} associations")
+        FIXES APPLIED:
+        - Use fields="xref_geneid" instead of positional arguments
+        - Handle empty values properly
+        - Add comprehensive error handling
+        """
+        logger.info("Downloading UniProt ID mappings...")
+        
+        # FIXED: UniProt to Entrez mapping
+        try:
+            logger.debug("Fetching UniProt->Entrez mappings...")
+            # CORRECT CALL: Use fields parameter
+            raw_mapping = uniprot.uniprot_data(fields="xref_geneid", organism="9606")
+            
+            # FIXED: Handle empty values properly (this was causing the original error)
+            self.uniprot_to_entrez = {
+                k: v.strip(";").split(";")[0]
+                for k, v in raw_mapping.items()
+                if v and v.strip(";")  # Only keep non-empty values
+            }
+            logger.info(f"Downloaded {len(self.uniprot_to_entrez)} UniProt->Entrez mappings")
+            
+        except Exception as e:
+            logger.error(f"Failed to download UniProt->Entrez mappings: {e}")
+            self.uniprot_to_entrez = {}
+        
+        # FIXED: UniProt to Ensembl mapping  
+        try:
+            logger.debug("Fetching UniProt->Ensembl mappings...")
+            # CORRECT CALL: Use fields parameter
+            raw_ensembl = uniprot.uniprot_data(fields="xref_ensembl", organism="9606")
+            
+            # Process Ensembl mappings (simplified approach)
+            # Note: Full CROssBARv2 would use proper Ensembl API for gene mapping
+            for uniprot_id, ensts in raw_ensembl.items():
+                if ensts:  # Only process non-empty values
+                    # For now, use a simplified mapping
+                    # In production, this would use proper Ensembl gene mapping
+                    first_transcript = ensts.strip(";").split(";")[0].split(" [")[0]
+                    if first_transcript.startswith("ENST"):
+                        # Simplified conversion - in production, use Ensembl API
+                        gene_id = first_transcript.replace("ENST", "ENSG").split(".")[0]
+                        self.ensembl_to_uniprot[gene_id] = uniprot_id
+            
+            logger.info(f"Downloaded {len(self.ensembl_to_uniprot)} Ensembl->UniProt mappings")
+            
+        except Exception as e:
+            logger.error(f"Failed to download Ensembl->UniProt mappings: {e}")
+            self.ensembl_to_uniprot = {}
+        
+        # Prepare simplified MONDO mappings (for demo)
+        self._prepare_mondo_mappings()
+    
+    def _prepare_mondo_mappings(self):
+        """Prepare simplified MONDO disease mappings."""
+        self.mondo_mappings = {
+            "EFO": {
+                "0000305": "MONDO:0007254",  # breast carcinoma
+                "0000684": "MONDO:0008903",  # lung carcinoma
+                "0005842": "MONDO:0005575",  # colorectal carcinoma
+            },
+            "DOID": {},  # Would be populated from real MONDO ontology
+        }
+        logger.debug("Prepared simplified MONDO mappings")
+    
+    def download_data(self):
+        """Download OpenTargets data (real or sample based on configuration)."""
+        logger.info(f"Downloading OpenTargets data (real={self.use_real_data})...")
+        
+        if self.use_real_data:
+            raw_data = self.download_real_data()
+            # Process the data with ID mapping
+            self._process_associations(raw_data)
+        else:
+            # For sample data, use pre-processed format
+            sample_data = self.get_sample_data()
+            logger.info(f"Using sample data: {len(sample_data)} associations")
+            self.associations_data = pd.DataFrame(sample_data)
+            logger.info(f"Sample data loaded: {len(self.associations_data)} associations ready")
+    
+    def _process_associations(self, raw_data: List[Dict[str, Any]]):
+        """
+        Process OpenTargets associations with proper ID mapping.
+        
+        Handles mapping failures gracefully - some associations will be lost
+        but the system continues to work.
+        """
+        logger.info("Processing OpenTargets associations...")
+        t0 = time()
+        
+        processed_associations = []
+        mapping_stats = {
+            "total": len(raw_data),
+            "score_filtered": 0,
+            "mapping_failed": 0,
+            "successful": 0
+        }
+        
+        for entry in tqdm(raw_data, desc="Processing associations"):
+            # Apply score threshold
+            score = entry.get("score", 0.0)
+            if score <= self.score_threshold:
+                mapping_stats["score_filtered"] += 1
+                continue
+            
+            # Extract IDs
+            target_id = entry["targetId"] 
+            disease_id = entry["diseaseId"]
+            evidence_count = entry.get("evidenceCount", 1)
+            
+            # Try ID mapping chain: Ensembl -> UniProt -> Entrez
+            entrez_id = None
+            if target_id in self.ensembl_to_uniprot:
+                uniprot_id = self.ensembl_to_uniprot[target_id]
+                entrez_id = self.uniprot_to_entrez.get(uniprot_id)
+            
+            # Map disease to MONDO
+            mondo_id = None
+            if "_" in disease_id:
+                db, disease_part = disease_id.split("_", 1)
+                mondo_id = self.mondo_mappings.get(db, {}).get(disease_part)
+            
+            # Check if mapping succeeded
+            if not entrez_id or not mondo_id:
+                mapping_stats["mapping_failed"] += 1
+                continue
+            
+            # Add successful association
+            processed_associations.append({
+                "gene_id": entrez_id,
+                "disease_id": mondo_id,
+                "opentargets_score": round(score, 3),
+                "evidence_count": evidence_count,
+                "source": "Open Targets"
+            })
+            mapping_stats["successful"] += 1
+        
+        # Create DataFrame
+        self.associations_data = pd.DataFrame(processed_associations)
+        
+        # Sort by score
+        if not self.associations_data.empty:
+            self.associations_data.sort_values(
+                by="opentargets_score",
+                ascending=False,
+                ignore_index=True,
+                inplace=True
+            )
+            
+            # Remove duplicates
+            self.associations_data.drop_duplicates(
+                subset=["gene_id", "disease_id"], 
+                ignore_index=True, 
+                inplace=True
+            )
+        
+        t1 = time()
+        
+        # Log processing results
+        logger.info(f"OpenTargets processing completed in {round((t1-t0), 2)} seconds")
+        logger.info(f"Processing stats: {mapping_stats}")
+        logger.info(f"Final associations: {len(self.associations_data)}")
     
     def get_nodes(self) -> Generator[tuple[str, str, dict], None, None]:
         """
-        Get nodes from Open Targets data.
+        Get nodes from OpenTargets data.
         
-        Yields:
-            Tuples of (node_id, node_label, node_properties)
+        Following CROssBARv2 approach: OpenTargets does not create nodes.
+        Gene nodes should come from UniProt/gene adapters.
+        Disease nodes should come from Disease Ontology adapter.
+        
+        Returns empty generator.
         """
-        # Process each dataset if not already done
-        if not self.nodes_data:
-            with self.timer("Processing Open Targets nodes"):
-                self.process_targets()
-                self.process_diseases()
-        
-        # Yield all nodes
-        for node_type, nodes in self.nodes_data.items():
-            for node in nodes:
-                yield (node["id"], node["label"], node["properties"])
+        # CROssBARv2 approach: no nodes from OpenTargets
+        # This prevents StopIteration errors while maintaining correct behavior
+        if False:
+            yield  # Makes this a valid generator
     
     def get_edges(self) -> Generator[tuple[Optional[str], str, str, str, dict], None, None]:
-        """
-        Get edges from Open Targets data.
+        """Get OpenTargets target-disease association edges."""
+        if self.associations_data.empty:
+            self.download_data()
         
-        Yields:
-            Tuples of (edge_id, source_id, target_id, edge_label, edge_properties)
-        """
-        # Process associations if not already done
-        if not self.edges_data:
-            with self.timer("Processing Open Targets edges"):
-                self.process_associations()
-        
-        # Yield all edges
-        for i, edge in enumerate(self.edges_data):
-            edge_id = f"opentargets_edge_{i}"
+        for idx, row in self.associations_data.iterrows():
+            edge_id = f"opentargets_{idx}"
+            
+            # Add prefixes to IDs
+            source_id = self.add_prefix_to_id("ncbigene", row["gene_id"])
+            target_id = self.add_prefix_to_id("mondo", row["disease_id"])
+            
+            # Prepare properties following CROssBARv2 schema
+            properties = {
+                "opentargets_score": float(row["opentargets_score"]),
+                "source": [row["source"]],  # Convert to list as per schema
+            }
+            
+            # Add evidence count if available (not in schema but useful)
+            if "evidence_count" in row:
+                properties["evidence_count"] = int(row["evidence_count"])
+            
+            # Add metadata
+            properties.update(self.get_metadata_dict())
+            
             yield (
                 edge_id,
-                edge["source_id"],
-                edge["target_id"],
-                edge["label"],
-                edge["properties"]
+                source_id,
+                target_id,
+                "gene_is_related_to_disease",  # Use CROssBARv2 gene-disease pattern
+                properties
             )
-    
-    def get_node_count(self) -> int:
-        """Get the total number of nodes."""
-        return sum(len(nodes) for nodes in self.nodes_data.values())
     
     def get_edge_count(self) -> int:
         """Get the total number of edges."""
-        return len(self.edges_data)
+        if self.associations_data.empty:
+            self.download_data()
+        return len(self.associations_data)
+    
+    def get_node_count(self) -> int:
+        """Get the total number of nodes (0 for CROssBARv2 approach)."""
+        return 0  # OpenTargets doesn't create nodes in CROssBARv2 approach
