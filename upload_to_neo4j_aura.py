@@ -23,11 +23,7 @@ from datetime import datetime
 # ============================================================================
 
 # Neo4j Aura connection details
-# The URI should look like: neo4j+s://xxxxxxxx.databases.neo4j.io
-# You can find this in your Aura console under "Connection URI"
-NEO4J_URI = "neo4j+s://bf06e3e0.databases.neo4j.io"  # ⚠️ UPDATE THIS
-NEO4J_USER = "neo4j"  # Default username (don't change)
-NEO4J_PASSWORD = "2igSbh2Yo-UEYB5CJCVNGwaevVRZLhvrGtKd1D27XJU"  # ⚠️ UPDATE THIS
+
 
 # Path to your BioCypher output (will auto-detect latest if not specified)
 BIOCYPHER_OUTPUT = None  # Set to None to auto-detect latest, or specify like "biocypher-out/20250915184645"
