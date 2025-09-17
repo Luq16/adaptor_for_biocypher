@@ -4,6 +4,7 @@ from biocypher._logger import logger
 import pandas as pd
 from tqdm import tqdm
 import os
+import collections
 
 # Use pypath for STRING data download (like CROssBARv2 implementation)
 try:
@@ -109,7 +110,7 @@ class StringAdapter(BaseAdapter, DataDownloadMixin):
     
     def download_data(self, force_download: bool = False):
         """
-        Download STRING data using pypath.
+        Download STRING data using pypath with CROssBARv2 approach.
         
         Args:
             force_download: Force re-download even if cached
@@ -118,42 +119,64 @@ class StringAdapter(BaseAdapter, DataDownloadMixin):
             raise ImportError("PyPath is required for STRING data download. Install with: pip install pypath-omnipath")
         
         with self.timer("Downloading STRING data"):
-            # Download protein interactions using pypath
-            self._download_string_interactions()
-            
-            # Get UniProt mappings
+            # Step 1: Get UniProt mappings FIRST (CROssBARv2 approach)
             self._get_uniprot_mappings()
+            
+            # Step 2: Download and filter protein interactions using mappings
+            self._download_string_interactions()
     
     def _download_string_interactions(self):
         """
-        Download STRING interactions using pypath (like CROssBARv2).
+        Download STRING interactions using pypath with CROssBARv2 filtering approach.
         """
         logger.info(f"Downloading STRING interactions for organism {self.organism} with {self.score_threshold} threshold")
         
         try:
-            # Use pypath to download STRING data with predefined threshold
-            # This follows the CROssBARv2 approach exactly
+            # Step 1: Download raw STRING interactions
+            logger.info("Downloading raw STRING interactions...")
             interactions_generator = pypath_string.string_links_interactions(
                 ncbi_tax_id=int(self.organism), 
                 score_threshold=self.score_threshold
             )
             
-            # Convert generator to list and then to DataFrame
-            interactions_list = list(interactions_generator)
+            # Step 2: Filter interactions (CROssBARv2 approach if mapping available)
+            filtered_interactions = []
             
-            if not interactions_list:
-                raise ValueError("No STRING interactions downloaded")
+            if hasattr(self, 'use_simple_mapping') and self.use_simple_mapping:
+                # Fallback: Take all interactions without UniProt filtering
+                logger.info("Using simplified approach - taking all interactions")
+                for interaction in interactions_generator:
+                    filtered_interactions.append(interaction)
+                    
+                    # Apply test mode limiting
+                    if self.test_mode and len(filtered_interactions) >= 100:
+                        logger.info(f"Test mode: Limited to 100 interactions")
+                        break
+            else:
+                # CROssBARv2 approach: Only keep interactions where both proteins can be mapped to UniProt
+                logger.info("Filtering interactions using CROssBARv2 approach...")
+                for interaction in interactions_generator:
+                    # Check if both proteins can be mapped to UniProt
+                    if (hasattr(self, 'string_to_uniprot') and 
+                        interaction.protein_a in self.string_to_uniprot and 
+                        interaction.protein_b in self.string_to_uniprot):
+                        filtered_interactions.append(interaction)
+                        
+                        # Apply test mode limiting during filtering
+                        if self.test_mode and len(filtered_interactions) >= 100:
+                            logger.info(f"Test mode: Limited to 100 filtered interactions")
+                            break
+                
+                if not filtered_interactions:
+                    logger.warning("No STRING interactions passed UniProt mapping filter, falling back to unfiltered")
+                    # Fallback to unfiltered if CROssBARv2 filtering yields no results
+                    self.use_simple_mapping = True
+                    return self._download_string_interactions()
             
             # Convert to DataFrame
-            # PyPath returns named tuples or similar objects
-            self.interactions = pd.DataFrame(interactions_list)
+            self.interactions = pd.DataFrame(filtered_interactions)
             
-            # Apply test mode limiting if needed
-            if self.test_mode and len(self.interactions) > 100:
-                self.interactions = self.interactions.head(100)
-                logger.info(f"Test mode: Limited to 100 interactions")
-            
-            logger.info(f"Downloaded {len(self.interactions)} STRING interactions with {self.score_threshold} confidence")
+            logger.info(f"Downloaded {len(self.interactions)} STRING interactions after UniProt filtering")
             
         except Exception as e:
             logger.error(f"Failed to download STRING interactions: {str(e)}")
@@ -162,26 +185,60 @@ class StringAdapter(BaseAdapter, DataDownloadMixin):
     def _get_uniprot_mappings(self):
         """
         Get UniProt mappings for STRING proteins.
+        
+        Attempts CROssBARv2 approach first, falls back to simple mapping if needed.
         """
         logger.info("Getting UniProt mappings for STRING proteins")
         
         try:
-            # Get unique protein IDs from interactions
-            protein_ids = set()
-            if not self.interactions.empty:
-                # Get all protein IDs from both columns
-                for col in ['protein_a', 'protein_b', 'source', 'target']:  # Handle different possible column names
-                    if col in self.interactions.columns:
-                        protein_ids.update(self.interactions[col].unique())
+            # Import collections for defaultdict
+            from pypath.inputs import uniprot
             
-            logger.info(f"Found {len(protein_ids)} unique STRING protein IDs")
+            # Initialize mapping structures
+            self.string_to_uniprot = collections.defaultdict(list)
+            self.swissprots = set()
             
-            # Store for later use in ID conversion
-            self.string_protein_ids = protein_ids
+            # Try CROssBARv2 approach first
+            logger.info("Attempting CROssBARv2 approach: Downloading UniProt cross-references to STRING...")
+            try:
+                uniprot_to_string = uniprot.uniprot_data("xref_string", "*", True)
+                
+                if uniprot_to_string:
+                    # Create STRING ID to UniProt ID mapping (exact CROssBARv2 implementation)
+                    for k, v in uniprot_to_string.items():
+                        # k = UniProt ID, v = STRING cross-reference data (semicolon-separated)
+                        if v:  # Make sure v is not empty
+                            for string_id in list(filter(None, v.split(";"))):
+                                if "." in string_id:
+                                    # Extract protein ID from STRING format (e.g., "9606.ENSP00012345" -> "ENSP00012345")
+                                    self.string_to_uniprot[string_id.split(".")[1]].append(k)
+                    
+                    logger.info(f"✅ CROssBARv2 approach: Created mapping for {len(self.string_to_uniprot)} STRING proteins")
+                else:
+                    raise ValueError("Empty UniProt cross-reference data")
+                    
+            except Exception as e:
+                logger.warning(f"CROssBARv2 approach failed: {e}")
+                logger.info("Falling back to simplified approach...")
+                
+                # Fallback: Don't filter - let edges be created with ENSP IDs and fix in post-processing
+                # This allows the adapter to work even without the full CROssBARv2 infrastructure
+                self.use_simple_mapping = True
+                logger.info("Using simplified mapping - edges will be created with ENSP IDs")
+            
+            # Try to get SwissProt proteins for filtering
+            try:
+                self.swissprots = set(uniprot._all_uniprots("*", True))
+                logger.info(f"Retrieved {len(self.swissprots)} SwissProt protein IDs for filtering")
+            except Exception as e:
+                logger.warning(f"Could not retrieve SwissProt IDs: {e}")
+                self.swissprots = set()
             
         except Exception as e:
-            logger.warning(f"Could not get UniProt mappings: {str(e)}")
-            self.string_protein_ids = set()
+            logger.warning(f"Could not set up UniProt mappings: {str(e)}")
+            self.string_to_uniprot = collections.defaultdict(list)
+            self.swissprots = set()
+            self.use_simple_mapping = True
     
     
     def get_nodes(self) -> Generator[tuple[str, str, dict], None, None]:
@@ -292,10 +349,9 @@ class StringAdapter(BaseAdapter, DataDownloadMixin):
     
     def _extract_uniprot_id(self, string_id: str) -> Optional[str]:
         """
-        Extract UniProt ID from STRING protein ID using pypath approach.
+        Extract UniProt ID from STRING protein ID using CROssBARv2 mapping approach.
         
-        PyPath STRING data may already include proper UniProt mappings,
-        or we need to handle STRING native identifiers appropriately.
+        Uses the downloaded UniProt cross-references to map STRING IDs to UniProt IDs.
         """
         if not string_id or pd.isna(string_id):
             return None
@@ -308,14 +364,26 @@ class StringAdapter(BaseAdapter, DataDownloadMixin):
             return string_id
         
         # Handle STRING native format (organism.protein_id)
+        protein_part = string_id
         if '.' in string_id:
-            organism_id, protein_id = string_id.split('.', 1)
-            # For human (9606), return the protein part directly
-            # PyPath may handle the mapping internally
-            return protein_id
+            organism_id, protein_part = string_id.split('.', 1)
         
-        # Return as-is for other formats
-        return string_id
+        # Use the CROssBARv2 mapping approach
+        if hasattr(self, 'string_to_uniprot') and protein_part in self.string_to_uniprot:
+            uniprot_ids = self.string_to_uniprot[protein_part]
+            
+            # Filter to SwissProt if available (following CROssBARv2 approach)
+            if hasattr(self, 'swissprots') and self.swissprots:
+                swissprot_matches = [uid for uid in uniprot_ids if uid in self.swissprots]
+                if swissprot_matches:
+                    return swissprot_matches[0]  # Take first SwissProt match
+            
+            # If no SwissProt match or no filtering, take first UniProt ID
+            if uniprot_ids:
+                return uniprot_ids[0]
+        
+        # If no mapping found, return None (following CROssBARv2 filtering approach)
+        return None
     
     def _get_edge_properties(self, interaction: pd.Series, score_col: Optional[str] = None) -> dict:
         """

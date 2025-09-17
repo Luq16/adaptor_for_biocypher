@@ -140,17 +140,25 @@ disease related to disease:
     properties:
         relationship_type: str
 
-# Protein-protein interactions (for future STRING adapter)
+# Protein-protein interactions (STRING adapter - consolidated with PPI adapter)
 protein interacts with protein:
     is_a: pairwise molecular interaction
     represented_as: edge
-    input_label: protein_protein_interaction
+    input_label: [protein_protein_interaction, protein_interacts_with_protein]  # Support both labels
     source: protein
     target: protein
     properties:
         interaction_score: float
         interaction_type: str
         evidence_type: str
+        source: str
+        pubmed_ids: str[]
+        intact_score: float
+        methods: str[]
+        interaction_types: str[]
+        experimental_system: str
+        confidence_score: float
+        detection_method: str
 
 # Drug-disease associations (for future integration)
 drug treats disease:
@@ -467,20 +475,4 @@ gene is orthologous with gene:
         source_organism: str
         target_organism: str
 
-# Protein-protein interaction edges (following CROssBARv2 methodology - no nodes, only edges)
-protein interacts with protein:
-    is_a: pairwise molecular interaction
-    represented_as: edge
-    input_label: protein_interacts_with_protein
-    source: protein
-    target: protein
-    properties:
-        source: str
-        pubmed_ids: str[]
-        intact_score: float
-        methods: str[]
-        interaction_types: str[]
-        experimental_system: str
-        confidence_score: float
-        detection_method: str
-        interaction_type: str
+# Protein-protein interaction edges - REMOVED (consolidated above at line 144)

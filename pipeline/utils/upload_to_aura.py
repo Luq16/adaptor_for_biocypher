@@ -11,13 +11,13 @@ import glob
 # Neo4j Aura connection details
 # The URI should look like: neo4j+s://xxxxxxxx.databases.neo4j.io
 # You can find this in your Aura console under "Connection URI"
-NEO4J_URI = "neo4j+s://YOUR-INSTANCE.databases.neo4j.io"  # ⚠️ UPDATE THIS with your Connection URI from Aura console
+NEO4J_URI = "neo4j+s://bf06e3e0.databases.neo4j.io"  # ⚠️ UPDATE THIS with your Connection URI from Aura console
 NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = ""  # Your password looks correct
+NEO4J_PASSWORD = "2igSbh2Yo-UEYB5CJCVNGwaevVRZLhvrGtKd1D27XJU"  # Your password looks correct
 
 
 # Path to your BioCypher output
-BIOCYPHER_OUTPUT = "biocypher-out/20250821002412"  # Update with your latest output directory
+BIOCYPHER_OUTPUT = "biocypher-out/20250916222853"  # Update with your latest output directory
 
 class Neo4jUploader:
     def __init__(self, uri, user, password):
@@ -30,23 +30,19 @@ class Neo4jUploader:
         """Upload nodes from CSV file."""
         print(f"Uploading {node_type} nodes from {csv_file}")
         
-        # Read CSV to get column names
-        df = pd.read_csv(csv_file, sep='\t', nrows=1)
-        columns = df.columns.tolist()
+        # Look for header file
+        header_file = csv_file.replace('-part000.csv', '-header.csv').replace('-part001.csv', '-header.csv')
         
-        # Create Cypher query
-        query = f"""
-        LOAD CSV WITH HEADERS FROM 'file:///{csv_file}' AS row
-        FIELDTERMINATOR '\t'
-        CREATE (n:{node_type} {{
-            id: row.`:ID`,
-            source: row.source
-        }})
-        """
-        
-        # For local files, we need to use a different approach
-        # Read the CSV and create nodes in batches
-        df = pd.read_csv(csv_file, sep='\t')
+        if os.path.exists(header_file):
+            # Read header
+            with open(header_file, 'r') as f:
+                headers = f.readline().strip().split('\t')
+            
+            # Read data with headers
+            df = pd.read_csv(csv_file, sep='\t', header=None, names=headers)
+        else:
+            # Read the CSV normally
+            df = pd.read_csv(csv_file, sep='\t')
         
         batch_size = 1000
         for i in range(0, len(df), batch_size):
@@ -68,8 +64,19 @@ class Neo4jUploader:
         """Upload edges from CSV file."""
         print(f"Uploading {edge_type} edges from {csv_file}")
         
-        # Read the CSV
-        df = pd.read_csv(csv_file, sep='\t')
+        # Look for header file
+        header_file = csv_file.replace('-part000.csv', '-header.csv').replace('-part001.csv', '-header.csv')
+        
+        if os.path.exists(header_file):
+            # Read header
+            with open(header_file, 'r') as f:
+                headers = f.readline().strip().split('\t')
+            
+            # Read data with headers
+            df = pd.read_csv(csv_file, sep='\t', header=None, names=headers)
+        else:
+            # Read the CSV normally
+            df = pd.read_csv(csv_file, sep='\t')
         
         batch_size = 1000
         for i in range(0, len(df), batch_size):
@@ -101,7 +108,9 @@ class Neo4jUploader:
             
             # Upload nodes
             node_files = glob.glob(f"{BIOCYPHER_OUTPUT}/*-part*.csv")
-            node_files = [f for f in node_files if not any(edge in f for edge in ['CompoundTargets', 'IsSubtypeOf', 'AssociatedWith'])]
+            # Exclude relationship files - these contain "AnnotatedWith", "Targets", "IsSubtypeOf", etc.
+            relationship_patterns = ['AnnotatedWith', 'CompoundTargets', 'IsSubtypeOf', 'AssociatedWith', 'Targets', 'Interacts']
+            node_files = [f for f in node_files if not any(pattern in f for pattern in relationship_patterns)]
             
             for node_file in node_files:
                 # Extract node type from filename
@@ -111,17 +120,23 @@ class Neo4jUploader:
             
             # Upload edges
             edge_files = glob.glob(f"{BIOCYPHER_OUTPUT}/*-part*.csv")
-            edge_files = [f for f in edge_files if any(edge in f for edge in ['CompoundTargets', 'IsSubtypeOf', 'AssociatedWith'])]
+            # Include relationship files - these contain "AnnotatedWith", "Targets", "IsSubtypeOf", etc.
+            relationship_patterns = ['AnnotatedWith', 'CompoundTargets', 'IsSubtypeOf', 'AssociatedWith', 'Targets', 'Interacts']
+            edge_files = [f for f in edge_files if any(pattern in f for pattern in relationship_patterns)]
             
             for edge_file in edge_files:
                 # Extract edge type from filename
                 filename = os.path.basename(edge_file)
-                if 'CompoundTargets' in filename:
+                if 'AnnotatedWith' in filename:
+                    edge_type = 'ANNOTATED_WITH'
+                elif 'CompoundTargets' in filename:
                     edge_type = 'TARGETS'
                 elif 'IsSubtypeOf' in filename:
                     edge_type = 'IS_SUBTYPE_OF'
                 elif 'AssociatedWith' in filename:
                     edge_type = 'ASSOCIATED_WITH'
+                elif 'Interacts' in filename:
+                    edge_type = 'INTERACTS_WITH'
                 else:
                     edge_type = 'RELATES_TO'
                 
