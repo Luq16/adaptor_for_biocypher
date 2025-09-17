@@ -11,9 +11,7 @@ import glob
 # Neo4j Aura connection details
 # The URI should look like: neo4j+s://xxxxxxxx.databases.neo4j.io
 # You can find this in your Aura console under "Connection URI"
-NEO4J_URI = "neo4j+s://bf06e3e0.databases.neo4j.io"  # ⚠️ UPDATE THIS with your Connection URI from Aura console
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "2igSbh2Yo-UEYB5CJCVNGwaevVRZLhvrGtKd1D27XJU"  # Your password looks correct
+ # Your password looks correct
 
 
 # Path to your BioCypher output
